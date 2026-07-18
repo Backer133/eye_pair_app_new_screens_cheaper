@@ -1,14 +1,15 @@
-// PNG -> 160x160 RGB565 Konvertierung fuer Cloud-Eye-Upload via BLE.
-// LVGL auf dem ESP32-C3 erwartet little-endian RGB565: low-byte zuerst.
+// PNG -> 240x240 RGB565 Konvertierung fuer Cloud-Eye-Upload via BLE.
+// Zielgeraet: ESP32-S3-LCD-1.28 (GC9A01, 240x240). LVGL erwartet little-endian
+// RGB565: low-byte zuerst.
 
 import 'dart:typed_data';
 import 'package:image/image.dart' as img;
 
-const int kEyeWidth  = 160;
-const int kEyeHeight = 160;
-const int kRgb565ByteCount = kEyeWidth * kEyeHeight * 2;  // 51200 Bytes
+const int kEyeWidth  = 240;
+const int kEyeHeight = 240;
+const int kRgb565ByteCount = kEyeWidth * kEyeHeight * 2;  // 115200 Bytes
 
-/// Decodiert PNG/JPG, resized auf 160x160, konvertiert zu RGB565 LE.
+/// Decodiert PNG/JPG, resized auf 240x240, konvertiert zu RGB565 LE.
 /// Bild wird unveraendert uebertragen - keine Hintergrund-Konvertierung.
 /// Tipp: PNG bitte direkt mit weissem Hintergrund hochladen (Display ist weiss).
 Uint8List pngToRgb565(Uint8List pngBytes) {

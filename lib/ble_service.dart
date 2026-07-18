@@ -3,6 +3,9 @@ import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'image_pipeline.dart' show kRgb565ByteCount;
 
 // UUIDs MUESSEN identisch zu denen im Master.ino sein!
 class EyeUuids {
@@ -16,6 +19,10 @@ class EyeUuids {
   static final Guid chrUploadStat   = Guid("6E400008-B5A3-F393-E0A9-E50E24DCCA9E");
   static final Guid chrSlaveReceipt = Guid("6E400009-B5A3-F393-E0A9-E50E24DCCA9E");
   static final Guid chrSlotStatus   = Guid("6E40000A-B5A3-F393-E0A9-E50E24DCCA9E");
+  // Zugangsschutz (BLE-Sicherheit)
+  static final Guid chrAuth         = Guid("6E40000B-B5A3-F393-E0A9-E50E24DCCA9E");  // WRITE uint32: 6-stelliger Code
+  static final Guid chrSetKey       = Guid("6E40000C-B5A3-F393-E0A9-E50E24DCCA9E");  // WRITE uint32: neuen Geraete-Key
+  static final Guid chrAuthStatus   = Guid("6E40000D-B5A3-F393-E0A9-E50E24DCCA9E");  // READ/NOTIFY: 1=autorisiert
 
   static final Guid svcDiag      = Guid("6E400010-B5A3-F393-E0A9-E50E24DCCA9E");
   static final Guid chrState     = Guid("6E400011-B5A3-F393-E0A9-E50E24DCCA9E");
@@ -27,6 +34,11 @@ class EyeUuids {
 
 const int kHardcodedEyeCount = 4;   // A7, A10, A12, A13 (in dieser Reihenfolge!)
 const int kCloudSlotCount    = 5;   // 5 Slots in LittleFS auf ESP
+
+// Werks-Standard-Zugangscode (muss zu DEFAULT_DEVICE_KEY in der Firmware passen).
+// Wird beim Connect automatisch gesendet, bis der User in den Einstellungen einen
+// eigenen Code setzt (dann pro Geraet in SharedPreferences gemerkt).
+const int kDefaultDeviceKey = 123456;
 
 const Map<int, String> kPairStateNames = {
   0: 'BOOT',
@@ -66,6 +78,10 @@ class EyeBle extends ChangeNotifier {
   String slaveMac = "--";
   String masterMac = "--";
   bool connected = false;
+  // Zugangsschutz: true = Verbindung ist autorisiert (Steuerung freigeschaltet).
+  bool authorized = false;
+  bool authSupported = false;  // false = alte Firmware ohne Auth-Charakteristik
+  StreamSubscription<List<int>>? _subAuthStatus;
   // Slave-Receipt nach Cloud-Eye-Upload
   int slaveReceiptSlot      = 0;
   int slaveUniqueReceived   = 0;
@@ -102,9 +118,73 @@ class EyeBle extends ChangeNotifier {
 
     await _readAll();
     await _subscribeNotifies();
+    await _authenticate();   // Zugangscode (Default 123456) automatisch senden
 
     connected = true;
     notifyListeners();
+  }
+
+  // ===== Zugangsschutz =====
+
+  String get _keyPrefKey => 'devkey_${device?.remoteId.str ?? "unknown"}';
+
+  Future<int> _loadStoredKey() async {
+    final p = await SharedPreferences.getInstance();
+    return p.getInt(_keyPrefKey) ?? kDefaultDeviceKey;
+  }
+
+  Future<void> _storeKey(int key) async {
+    final p = await SharedPreferences.getInstance();
+    await p.setInt(_keyPrefKey, key);
+  }
+
+  Future<void> _writeKey(BluetoothCharacteristic c, int key) async {
+    final b = ByteData(4)..setUint32(0, key, Endian.little);
+    await c.write(b.buffer.asUint8List(), withoutResponse: false);
+  }
+
+  // Beim Connect: Auth-Status abonnieren + gespeicherten Code an CHR_AUTH senden.
+  // Alte Firmware ohne CHR_AUTH -> authSupported=false, alles gilt als frei.
+  Future<void> _authenticate() async {
+    final c = _chars[EyeUuids.chrAuth];
+    if (c == null) {
+      authSupported = false;
+      authorized = true;
+      notifyListeners();
+      return;
+    }
+    authSupported = true;
+    final cs = _chars[EyeUuids.chrAuthStatus];
+    if (cs != null) {
+      try {
+        await cs.setNotifyValue(true);
+        _subAuthStatus = cs.lastValueStream.listen((v) {
+          if (v.isNotEmpty) { authorized = v[0] == 1; notifyListeners(); }
+        });
+        final init = await cs.read();
+        if (init.isNotEmpty) authorized = init[0] == 1;
+      } catch (_) {}
+    }
+    await _writeKey(c, await _loadStoredKey());
+  }
+
+  /// Manuelle Code-Eingabe (falls der gespeicherte Code nicht passt, z.B. anderer
+  /// Nutzer / Admin-Key). Merkt sich den Code fuer dieses Geraet.
+  Future<void> authenticateWith(int key) async {
+    final c = _chars[EyeUuids.chrAuth];
+    if (c == null) return;
+    await _writeKey(c, key);
+    await _storeKey(key);
+  }
+
+  /// Aendert den Geraete-Key (nur wenn autorisiert). Speichert ihn lokal, damit der
+  /// naechste Connect automatisch mit dem neuen Code authentifiziert.
+  Future<bool> changeDeviceKey(int newKey) async {
+    final c = _chars[EyeUuids.chrSetKey];
+    if (c == null || newKey < 0 || newKey > 999999) return false;
+    await _writeKey(c, newKey);
+    await _storeKey(newKey);
+    return true;
   }
 
   /// Reconnect zum gleichen Master nach Disconnect (z.B. nach Cloud-Upload).
@@ -120,10 +200,13 @@ class EyeBle extends ChangeNotifier {
     await _subLoss?.cancel();
     await _subSilence?.cancel();
     await _subSlaveReceipt?.cancel();
+    await _subAuthStatus?.cancel();
     await _subConn?.cancel();
     _chars.clear();
     try { await device?.disconnect(); } catch (_) {}
     connected = false;
+    authorized = false;
+    authSupported = false;
     notifyListeners();
   }
 
@@ -252,8 +335,8 @@ class EyeBle extends ChangeNotifier {
     final c = _chars[EyeUuids.chrEyeUpload];
     if (c == null) return false;
     if (slot < 0 || slot >= kCloudSlotCount) return false;
-    if (rgb565data.length != 160 * 160 * 2) {
-      throw Exception('rgb565data muss genau ${160*160*2} Bytes haben (ist ${rgb565data.length})');
+    if (rgb565data.length != kRgb565ByteCount) {
+      throw Exception('rgb565data muss genau $kRgb565ByteCount Bytes haben (ist ${rgb565data.length})');
     }
     final total = (rgb565data.length + _kChunkSize - 1) ~/ _kChunkSize;
     for (int i = 0; i < total; i++) {

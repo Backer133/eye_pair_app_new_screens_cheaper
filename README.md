@@ -1,6 +1,8 @@
 # EyePair App
 
-Flutter-App zur Steuerung des ESP32-C3 Augen-Paars via BLE.
+Flutter-App zur Steuerung des ESP32-S3-LCD-1.28 Augen-Paars via BLE (240x240-Displays,
+Master↔Slave-Sync über Kabel). Cloud-Augen werden als 240x240-RGB565-Bilder hochgeladen.
+Optionaler Zugangsschutz per 6-stelligem Code (in der Firmware aktivierbar).
 
 ## Erstes Setup
 
@@ -74,16 +76,22 @@ Beide Wege haben die 7-Tage-Beschränkung weil kostenlose Apple-ID keine Long-Te
 
 ## Verwendung
 
-1. ESPs einschalten — Master sollte `EyePair-<PAIR_ID>` als BLE-Geraet zeigen
+1. ESPs einschalten — Master zeigt seinen Namen (z.B. `Augen Thomas`) als BLE-Geraet
 2. App starten → Scan automatisch
-3. Geraet antippen → verbindet
+3. Geraet antippen → verbindet; der Zugangscode (Standard **123456**) wird automatisch
+   gesendet. Passt er, ist die Steuerung freigeschaltet.
 4. Tabs:
-   - **Augen**: Grid mit 12 Designs, Antippen wechselt Master+Slave
-   - **Einstellungen**: Helligkeit (Slider), Animation an/aus, PAIR_ID setzen
-   - **Diagnose**: Live State, Silence, Loss-Rate, MACs
+   - **Augen**: Grid mit Designs, Antippen wechselt Master+Slave
+   - **Einstellungen**: Animation an/aus; **Zugang** (Status + Code eingeben) und
+     **Zugangscode aendern** (neuen 6-stelligen Code fuer dieses Augenpaar setzen)
+   - **Diagnose**: Live-Status
+
+Der **Admin-Key** (fest in der Firmware) verbindet auf alle Augenpaare — einfach als Code
+eingeben, falls der geraetespezifische Code unbekannt ist.
 
 ## Bei Problemen
 
 - **Kein EyePair sichtbar**: Master neu booten, im Serial-Log nach `BLE GATT bereit` schauen
-- **Connect failed**: BLE-Cache von Telefon leeren (Einstellungen → Bluetooth → EyePair vergessen)
-- **State bleibt DISCOVERY**: Slave fehlt oder ist out-of-range, kein BLE-Problem — siehe ESP-Serial-Logs
+- **Connect failed**: BLE-Cache von Telefon leeren (Einstellungen → Bluetooth → Geraet vergessen)
+- **Nicht autorisiert**: In den Einstellungen unter „Zugang" den richtigen 6-stelligen Code
+  eingeben (Standard 123456, oder den Admin-Key)
