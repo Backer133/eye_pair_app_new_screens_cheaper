@@ -27,7 +27,10 @@ jobs:
           channel: 'stable'
 
       - name: Init plattform-spezifische Templates
-        run: flutter create . --platforms=android,ios --project-name=eye_pair_app
+        # --org at.sbp  =>  applicationId "at.sbp.eye_pair_app".
+        # Bewusst anders als die alte App (com.example.eye_pair_app), damit beide
+        # Versionen parallel auf dem Handy installiert bleiben koennen.
+        run: flutter create . --platforms=android,ios --org at.sbp --project-name=eye_pair_app
 
       - name: Install deps
         run: flutter pub get
@@ -55,7 +58,7 @@ jobs:
       - name: Set Android app label
         run: |
           MANIFEST=android/app/src/main/AndroidManifest.xml
-          sed -i 's|android:label="eye_pair_app"|android:label="SBP Eye App"|' $MANIFEST
+          sed -i 's|android:label="eye_pair_app"|android:label="SBP Eye Settings"|' $MANIFEST
           grep 'android:label' $MANIFEST
 
       - name: Build APK
@@ -89,7 +92,10 @@ jobs:
           channel: 'stable'
 
       - name: Init Templates
-        run: flutter create . --platforms=android,ios --project-name=eye_pair_app
+        # --org at.sbp  =>  applicationId "at.sbp.eye_pair_app".
+        # Bewusst anders als die alte App (com.example.eye_pair_app), damit beide
+        # Versionen parallel auf dem Handy installiert bleiben koennen.
+        run: flutter create . --platforms=android,ios --org at.sbp --project-name=eye_pair_app
 
       - name: Install deps
         run: flutter pub get
@@ -102,9 +108,9 @@ jobs:
       - name: Set iOS display name
         run: |
           PLIST=ios/Runner/Info.plist
-          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName 'SBP Eye App'" $PLIST || \
-            /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string 'SBP Eye App'" $PLIST
-          /usr/libexec/PlistBuddy -c "Set :CFBundleName 'SBP Eye App'" $PLIST || true
+          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName 'SBP Eye Settings'" $PLIST || \
+            /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string 'SBP Eye Settings'" $PLIST
+          /usr/libexec/PlistBuddy -c "Set :CFBundleName 'SBP Eye Settings'" $PLIST || true
           /usr/libexec/PlistBuddy -c "Print :CFBundleDisplayName" $PLIST
 
       - name: Build iOS unsigned

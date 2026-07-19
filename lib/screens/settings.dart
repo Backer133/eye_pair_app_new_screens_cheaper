@@ -65,6 +65,37 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await widget.ble.authenticateWith(code);
   }
 
+  Future<void> _renameDevice() async {
+    final ctrl = TextEditingController(text: widget.ble.deviceName);
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Augenpaar benennen'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          maxLength: 23,
+          decoration: const InputDecoration(hintText: 'z.B. Gondel oben'),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Abbrechen')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+            child: const Text('OK'),
+          ),
+        ],
+      ),
+    );
+    if (name == null || name.isEmpty) return;
+    final ok = await widget.ble.setDeviceName(name);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(ok
+          ? 'Name geaendert - beim naechsten Scan sichtbar'
+          : 'Konnte Name nicht setzen (nicht autorisiert?)'),
+    ));
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
@@ -74,6 +105,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
         return ListView(
           padding: const EdgeInsets.all(16),
           children: [
+            // Anzeigename dieses Augenpaars - so unterscheidest du mehrere Paare.
+            Card(
+              child: ListTile(
+                leading: const Icon(Icons.remove_red_eye),
+                title: Text(ble.deviceName.isEmpty ? 'Augenpaar' : ble.deviceName),
+                subtitle: const Text('Name in der Geraeteliste'),
+                trailing: ble.authorized
+                    ? IconButton(
+                        icon: const Icon(Icons.edit),
+                        tooltip: 'Umbenennen',
+                        onPressed: _renameDevice,
+                      )
+                    : null,
+              ),
+            ),
+            const SizedBox(height: 8),
             Card(
               child: SwitchListTile(
                 secondary: const Icon(Icons.movie_filter),

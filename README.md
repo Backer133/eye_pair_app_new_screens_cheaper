@@ -82,9 +82,18 @@ Beide Wege haben die 7-Tage-Beschränkung weil kostenlose Apple-ID keine Long-Te
    gesendet. Passt er, ist die Steuerung freigeschaltet.
 4. Tabs:
    - **Augen**: Grid mit Designs, Antippen wechselt Master+Slave
-   - **Einstellungen**: Animation an/aus; **Zugang** (Status + Code eingeben) und
+   - **Einstellungen**: ganz oben der **Name des Augenpaars** (Stift-Symbol =
+     umbenennen); Animation an/aus; **Zugang** (Status + Code eingeben) und
      **Zugangscode aendern** (neuen 6-stelligen Code fuer dieses Augenpaar setzen)
    - **Diagnose**: Live-Status
+
+## Mehrere Augenpaare unterscheiden
+
+Alle Master werden **identisch geflasht**. Ab Werk meldet sich jedes Paar mit einem
+eindeutigen Namen aus seiner MAC (z.B. `Augen-4C48`). In den Einstellungen kannst du
+jedes Paar **frei umbenennen** (z.B. „Gondel oben"). Der Name wird im Geraet gespeichert
+(NVS) und erscheint beim naechsten Scan in der Geraeteliste — so haeltst du beliebig
+viele Paare auseinander. Umbenennen erfordert Autorisierung (Zugangscode).
 
 Der **Admin-Key** (fest in der Firmware) verbindet auf alle Augenpaare — einfach als Code
 eingeben, falls der geraetespezifische Code unbekannt ist.

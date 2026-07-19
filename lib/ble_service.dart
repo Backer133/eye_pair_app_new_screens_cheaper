@@ -23,6 +23,7 @@ class EyeUuids {
   static final Guid chrAuth         = Guid("6E40000B-B5A3-F393-E0A9-E50E24DCCA9E");  // WRITE uint32: 6-stelliger Code
   static final Guid chrSetKey       = Guid("6E40000C-B5A3-F393-E0A9-E50E24DCCA9E");  // WRITE uint32: neuen Geraete-Key
   static final Guid chrAuthStatus   = Guid("6E40000D-B5A3-F393-E0A9-E50E24DCCA9E");  // READ/NOTIFY: 1=autorisiert
+  static final Guid chrDeviceName   = Guid("6E40000E-B5A3-F393-E0A9-E50E24DCCA9E");  // READ/WRITE: Anzeigename
 
   static final Guid svcDiag      = Guid("6E400010-B5A3-F393-E0A9-E50E24DCCA9E");
   static final Guid chrState     = Guid("6E400011-B5A3-F393-E0A9-E50E24DCCA9E");
@@ -82,6 +83,8 @@ class EyeBle extends ChangeNotifier {
   bool authorized = false;
   bool authSupported = false;  // false = alte Firmware ohne Auth-Charakteristik
   StreamSubscription<List<int>>? _subAuthStatus;
+  // Frei waehlbarer Anzeigename dieses Augenpaars (aus CHR_DEVICE_NAME).
+  String deviceName = "";
   // Slave-Receipt nach Cloud-Eye-Upload
   int slaveReceiptSlot      = 0;
   int slaveUniqueReceived   = 0;
@@ -187,6 +190,18 @@ class EyeBle extends ChangeNotifier {
     return true;
   }
 
+  /// Setzt den frei waehlbaren Anzeigenamen des Augenpaars (nur wenn autorisiert).
+  /// Der neue Name erscheint beim naechsten Scan in der Geraeteliste.
+  Future<bool> setDeviceName(String name) async {
+    final c = _chars[EyeUuids.chrDeviceName];
+    final trimmed = name.trim();
+    if (c == null || trimmed.isEmpty || trimmed.length > 23) return false;
+    await c.write(trimmed.codeUnits, withoutResponse: false);
+    deviceName = trimmed;
+    notifyListeners();
+    return true;
+  }
+
   /// Reconnect zum gleichen Master nach Disconnect (z.B. nach Cloud-Upload).
   /// Wirft Exception wenn kein device bekannt oder Reconnect fehlschlaegt.
   Future<void> reconnect() async {
@@ -240,6 +255,8 @@ class EyeBle extends ChangeNotifier {
     }
     final slotMask = await _readByte(EyeUuids.chrSlotStatus);
     if (slotMask != null) slotOccupiedMask = slotMask;
+    final nm = await _readBytes(EyeUuids.chrDeviceName);
+    if (nm != null && nm.isNotEmpty) deviceName = String.fromCharCodes(nm);
   }
 
   void _parseReceipt(List<int> v) {
