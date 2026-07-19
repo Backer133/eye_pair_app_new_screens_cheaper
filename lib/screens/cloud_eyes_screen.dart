@@ -36,7 +36,7 @@ class _CloudEyesScreenState extends State<CloudEyesScreen> {
       final list = await _api.list();
       // Bereits installierte Bilder ausblenden - die User loescht sie via Long-press
       // im Eye-Grid, dann tauchen sie hier wieder auf.
-      final installed = await SlotMetadataStore.getInstalledUrls(widget.ble.pairId);
+      final installed = await SlotMetadataStore.getInstalledUrls(widget.ble.deviceId);
       final visible = list.where((e) => !installed.contains(e.downloadUrl)).toList();
       if (!mounted) return;
       setState(() { _eyes = visible; _loading = false; });
@@ -62,7 +62,7 @@ class _CloudEyesScreenState extends State<CloudEyesScreen> {
         setState(() { _downloadDone = sent; _downloadTotal = total; });
       });
       // Slot-Metadata persistieren
-      await SlotMetadataStore.set(widget.ble.pairId, slot, eye.name, eye.downloadUrl);
+      await SlotMetadataStore.set(widget.ble.deviceId, slot, eye.name, eye.downloadUrl);
       await widget.onSlotMetaChanged?.call();
       // Cloud-Tab Liste aktualisieren (Bild verschwindet weil installiert)
       await _refresh();

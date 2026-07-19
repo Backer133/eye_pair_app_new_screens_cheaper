@@ -13,7 +13,6 @@ class EyeUuids {
   static final Guid chrEyeId     = Guid("6E400002-B5A3-F393-E0A9-E50E24DCCA9E");
   static final Guid chrBrightness= Guid("6E400003-B5A3-F393-E0A9-E50E24DCCA9E");
   static final Guid chrAnimEn    = Guid("6E400004-B5A3-F393-E0A9-E50E24DCCA9E");
-  static final Guid chrPairIdBle = Guid("6E400005-B5A3-F393-E0A9-E50E24DCCA9E");
   static final Guid chrEyeCount  = Guid("6E400006-B5A3-F393-E0A9-E50E24DCCA9E");
   static final Guid chrEyeUpload    = Guid("6E400007-B5A3-F393-E0A9-E50E24DCCA9E");
   static final Guid chrUploadStat   = Guid("6E400008-B5A3-F393-E0A9-E50E24DCCA9E");
@@ -26,11 +25,8 @@ class EyeUuids {
   static final Guid chrDeviceName   = Guid("6E40000E-B5A3-F393-E0A9-E50E24DCCA9E");  // READ/WRITE: Anzeigename
 
   static final Guid svcDiag      = Guid("6E400010-B5A3-F393-E0A9-E50E24DCCA9E");
-  static final Guid chrState     = Guid("6E400011-B5A3-F393-E0A9-E50E24DCCA9E");
-  static final Guid chrLossRate  = Guid("6E400012-B5A3-F393-E0A9-E50E24DCCA9E");
-  static final Guid chrSilenceMs = Guid("6E400013-B5A3-F393-E0A9-E50E24DCCA9E");
-  static final Guid chrSlaveMac  = Guid("6E400014-B5A3-F393-E0A9-E50E24DCCA9E");
-  static final Guid chrMasterMac = Guid("6E400015-B5A3-F393-E0A9-E50E24DCCA9E");
+  // Kabel-Status: 1 = zweiter Screen (Slave) haengt am Kabel, 0 = nicht verbunden.
+  static final Guid chrSlaveLink = Guid("6E400016-B5A3-F393-E0A9-E50E24DCCA9E");
 }
 
 const int kHardcodedEyeCount = 4;   // A7, A10, A12, A13 (in dieser Reihenfolge!)
@@ -40,16 +36,6 @@ const int kCloudSlotCount    = 5;   // 5 Slots in LittleFS auf ESP
 // Wird beim Connect automatisch gesendet, bis der User in den Einstellungen einen
 // eigenen Code setzt (dann pro Geraet in SharedPreferences gemerkt).
 const int kDefaultDeviceKey = 123456;
-
-const Map<int, String> kPairStateNames = {
-  0: 'BOOT',
-  1: 'QUICK_RECONNECT',
-  2: 'DISCOVERY',
-  3: 'PAIRING',
-  4: 'LINKED',
-  5: 'DEGRADED',
-  6: 'LOST',
-};
 
 // Asset-Namen zu Eye-Index. MUSS in der Reihenfolge identisch zu EYE_IMAGES[]
 // im Master.ino + Slave.ino sein! Nur hardcoded Augen (Index 0..3).
@@ -71,13 +57,10 @@ class EyeBle extends ChangeNotifier {
   int eyeId = 0;
   int brightness = 255;
   int animEnabled = 1;
-  int pairId = 10;
   int eyeCount = 0;
-  int linkState = 0;
-  int lossRate = 0;
-  int silenceMs = 0;
-  String slaveMac = "--";
-  String masterMac = "--";
+  // Kabel-Status: haengt der zweite Screen (Slave) am Kabel? Kommt aus dem
+  // Lebenszeichen, das der Slave ueber UART an den Master schickt.
+  bool slaveLinked = false;
   bool connected = false;
   // Zugangsschutz: true = Verbindung ist autorisiert (Steuerung freigeschaltet).
   bool authorized = false;
@@ -98,9 +81,7 @@ class EyeBle extends ChangeNotifier {
   int slotOccupiedMask      = 0;
 
   StreamSubscription<List<int>>? _subEyeId;
-  StreamSubscription<List<int>>? _subState;
-  StreamSubscription<List<int>>? _subLoss;
-  StreamSubscription<List<int>>? _subSilence;
+  StreamSubscription<List<int>>? _subSlaveLink;
   StreamSubscription<BluetoothConnectionState>? _subConn;
 
   Future<void> connectAndDiscover(BluetoothDevice d) async {
@@ -129,7 +110,11 @@ class EyeBle extends ChangeNotifier {
 
   // ===== Zugangsschutz =====
 
-  String get _keyPrefKey => 'devkey_${device?.remoteId.str ?? "unknown"}';
+  /// Stabiler, eindeutiger Schluessel pro Geraet (BLE-Adresse). Wird fuer lokal
+  /// gespeicherte Daten benutzt (Zugangscode, Cloud-Slot-Metadaten).
+  String get deviceId => device?.remoteId.str ?? 'unknown';
+
+  String get _keyPrefKey => 'devkey_$deviceId';
 
   Future<int> _loadStoredKey() async {
     final p = await SharedPreferences.getInstance();
@@ -211,9 +196,7 @@ class EyeBle extends ChangeNotifier {
 
   Future<void> disconnect() async {
     await _subEyeId?.cancel();
-    await _subState?.cancel();
-    await _subLoss?.cancel();
-    await _subSilence?.cancel();
+    await _subSlaveLink?.cancel();
     await _subSlaveReceipt?.cancel();
     await _subAuthStatus?.cancel();
     await _subConn?.cancel();
@@ -222,6 +205,7 @@ class EyeBle extends ChangeNotifier {
     connected = false;
     authorized = false;
     authSupported = false;
+    slaveLinked = false;
     notifyListeners();
   }
 
@@ -229,26 +213,14 @@ class EyeBle extends ChangeNotifier {
     final eid   = await _readByte(EyeUuids.chrEyeId);
     final br    = await _readByte(EyeUuids.chrBrightness);
     final anim  = await _readByte(EyeUuids.chrAnimEn);
-    final pid   = await _readByte(EyeUuids.chrPairIdBle);
     final cnt   = await _readByte(EyeUuids.chrEyeCount);
-    final st    = await _readByte(EyeUuids.chrState);
-    final loss  = await _readByte(EyeUuids.chrLossRate);
-    final smac  = await _readBytes(EyeUuids.chrSlaveMac);
-    final mmac  = await _readBytes(EyeUuids.chrMasterMac);
-    final sil   = await _readBytes(EyeUuids.chrSilenceMs);
+    final link  = await _readByte(EyeUuids.chrSlaveLink);
 
     if (eid != null)  eyeId      = eid;
     if (br != null)   brightness = br;
     if (anim != null) animEnabled = anim;
-    if (pid != null)  pairId     = pid;
     if (cnt != null)  eyeCount   = cnt;
-    if (st != null)   linkState  = st;
-    if (loss != null) lossRate   = loss;
-    if (smac != null && smac.length == 6) slaveMac  = _fmtMac(smac);
-    if (mmac != null && mmac.length == 6) masterMac = _fmtMac(mmac);
-    if (sil != null && sil.length >= 4) {
-      silenceMs = ByteData.sublistView(Uint8List.fromList(sil)).getUint32(0, Endian.little);
-    }
+    if (link != null) slaveLinked = link == 1;
     final rcp = await _readBytes(EyeUuids.chrSlaveReceipt);
     if (rcp != null && rcp.length >= 6) {
       _parseReceipt(rcp);
@@ -274,28 +246,12 @@ class EyeBle extends ChangeNotifier {
         if (v.isNotEmpty) { eyeId = v[0]; notifyListeners(); }
       });
     }
-    final cs = _chars[EyeUuids.chrState];
-    if (cs != null) {
-      await cs.setNotifyValue(true);
-      _subState = cs.lastValueStream.listen((v) {
-        if (v.isNotEmpty) { linkState = v[0]; notifyListeners(); }
-      });
-    }
-    final cl = _chars[EyeUuids.chrLossRate];
+    // Kabel-Status live mitverfolgen (Master notifyt 1x/s).
+    final cl = _chars[EyeUuids.chrSlaveLink];
     if (cl != null) {
       await cl.setNotifyValue(true);
-      _subLoss = cl.lastValueStream.listen((v) {
-        if (v.isNotEmpty) { lossRate = v[0]; notifyListeners(); }
-      });
-    }
-    final csi = _chars[EyeUuids.chrSilenceMs];
-    if (csi != null) {
-      await csi.setNotifyValue(true);
-      _subSilence = csi.lastValueStream.listen((v) {
-        if (v.length >= 4) {
-          silenceMs = ByteData.sublistView(Uint8List.fromList(v)).getUint32(0, Endian.little);
-          notifyListeners();
-        }
+      _subSlaveLink = cl.lastValueStream.listen((v) {
+        if (v.isNotEmpty) { slaveLinked = v[0] == 1; notifyListeners(); }
       });
     }
     final crcp = _chars[EyeUuids.chrSlaveReceipt];
@@ -391,7 +347,4 @@ class EyeBle extends ChangeNotifier {
     notifyListeners();
   }
 
-  static String _fmtMac(List<int> b) {
-    return b.map((x) => x.toRadixString(16).padLeft(2, '0').toUpperCase()).join(':');
-  }
 }

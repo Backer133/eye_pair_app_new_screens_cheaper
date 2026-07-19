@@ -37,7 +37,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _loadSlotMeta() async {
-    final pid = widget.ble.pairId;
+    final pid = widget.ble.deviceId;
     for (int s = 0; s < kCloudSlotCount; s++) {
       _slotMeta[s] = await SlotMetadataStore.get(pid, s);
     }
@@ -45,7 +45,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _deleteSlot(int slot) async {
-    final pid = widget.ble.pairId;
+    final pid = widget.ble.deviceId;
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(

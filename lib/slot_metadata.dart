@@ -1,7 +1,10 @@
-// Persistiert pro PAIR_ID welche Cloud-Bilder in welchem Slot drauf sind.
+// Persistiert pro GERAET welche Cloud-Bilder in welchem Slot drauf sind.
+// Schluessel ist die BLE-Adresse des Masters (stabil + eindeutig). Frueher war es
+// die PAIR_ID - die ist seit dem identischen Flashen aller Master bei allen gleich
+// und haette dazu gefuehrt, dass sich alle Augenpaare dieselben Eintraege teilen.
 // Layout im SharedPreferences:
-//   slot_<pair_id>_<slot>_url   -> String (download_url)
-//   slot_<pair_id>_<slot>_name  -> String (Anzeigename)
+//   slot_<device_id>_<slot>_url   -> String (download_url)
+//   slot_<device_id>_<slot>_name  -> String (Anzeigename)
 
 import 'package:shared_preferences/shared_preferences.dart';
 import 'ble_service.dart';  // kCloudSlotCount
@@ -13,36 +16,36 @@ class SlotMeta {
 }
 
 class SlotMetadataStore {
-  static String _keyUrl(int pid, int slot)  => 'slot_${pid}_${slot}_url';
-  static String _keyName(int pid, int slot) => 'slot_${pid}_${slot}_name';
+  static String _keyUrl(String dev, int slot)  => 'slot_${dev}_${slot}_url';
+  static String _keyName(String dev, int slot) => 'slot_${dev}_${slot}_name';
 
-  static Future<SlotMeta?> get(int pairId, int slot) async {
+  static Future<SlotMeta?> get(String deviceId, int slot) async {
     final sp = await SharedPreferences.getInstance();
-    final url = sp.getString(_keyUrl(pairId, slot));
+    final url = sp.getString(_keyUrl(deviceId, slot));
     if (url == null || url.isEmpty) return null;
-    final name = sp.getString(_keyName(pairId, slot)) ?? '?';
+    final name = sp.getString(_keyName(deviceId, slot)) ?? '?';
     return SlotMeta(name, url);
   }
 
-  static Future<void> set(int pairId, int slot, String name, String url) async {
+  static Future<void> set(String deviceId, int slot, String name, String url) async {
     final sp = await SharedPreferences.getInstance();
-    await sp.setString(_keyUrl(pairId, slot), url);
-    await sp.setString(_keyName(pairId, slot), name);
+    await sp.setString(_keyUrl(deviceId, slot), url);
+    await sp.setString(_keyName(deviceId, slot), name);
   }
 
-  static Future<void> clear(int pairId, int slot) async {
+  static Future<void> clear(String deviceId, int slot) async {
     final sp = await SharedPreferences.getInstance();
-    await sp.remove(_keyUrl(pairId, slot));
-    await sp.remove(_keyName(pairId, slot));
+    await sp.remove(_keyUrl(deviceId, slot));
+    await sp.remove(_keyName(deviceId, slot));
   }
 
-  /// Set aller URLs die fuer das angegebene Pair derzeit in irgendeinem Slot installiert sind.
+  /// Set aller URLs die auf diesem Geraet derzeit in irgendeinem Slot installiert sind.
   /// Wird vom Cloud-Tab benutzt um bereits installierte Bilder auszublenden.
-  static Future<Set<String>> getInstalledUrls(int pairId) async {
+  static Future<Set<String>> getInstalledUrls(String deviceId) async {
     final sp = await SharedPreferences.getInstance();
     final urls = <String>{};
     for (int s = 0; s < kCloudSlotCount; s++) {
-      final url = sp.getString(_keyUrl(pairId, s));
+      final url = sp.getString(_keyUrl(deviceId, s));
       if (url != null && url.isNotEmpty) urls.add(url);
     }
     return urls;
