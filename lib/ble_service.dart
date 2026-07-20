@@ -3,7 +3,6 @@ import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import 'image_pipeline.dart' show kRgb565ByteCount;
 
@@ -33,8 +32,8 @@ const int kHardcodedEyeCount = 4;   // A7, A10, A12, A13 (in dieser Reihenfolge!
 const int kCloudSlotCount    = 5;   // 5 Slots in LittleFS auf ESP
 
 // Werks-Standard-Zugangscode (muss zu DEFAULT_DEVICE_KEY in der Firmware passen).
-// Wird beim Connect automatisch gesendet, bis der User in den Einstellungen einen
-// eigenen Code setzt (dann pro Geraet in SharedPreferences gemerkt).
+// Referenzwert/Hinweis fuer den User - wird NICHT mehr automatisch gesendet: der Code
+// muss bei jedem Verbinden manuell eingegeben werden (auch dieser Default).
 const int kDefaultDeviceKey = 123456;
 
 // Asset-Namen zu Eye-Index. MUSS in der Reihenfolge identisch zu EYE_IMAGES[]
@@ -67,6 +66,11 @@ class EyeBle extends ChangeNotifier {
   bool authSupported = false;  // false = alte Firmware ohne Auth-Charakteristik
   // Zaehlt hoch bei jedem fehlgeschlagenen Code-Versuch (fuer UI-Feedback).
   int authAttempts = 0;
+  // Nur im RAM (nie in SharedPreferences): der in DIESER App-Sitzung erfolgreich
+  // eingegebene Zugangscode. Damit laufen interne Reconnects (z.B. Cloud-Upload)
+  // still weiter, ein frischer App-Start / manuelles Verbinden aber verlangt den
+  // Code erneut. So reicht App-Besitz allein nicht fuer Zugriff.
+  int? _sessionKey;
   StreamSubscription<List<int>>? _subAuthStatus;
   // Frei waehlbarer Anzeigename dieses Augenpaars (aus CHR_DEVICE_NAME).
   String deviceName = "";
@@ -120,24 +124,17 @@ class EyeBle extends ChangeNotifier {
   /// autorisiert -> die App muss die Steuerung sperren (Zugangs-Gate zeigen).
   bool get locked => authSupported && !authorized;
 
-  String get _keyPrefKey => 'devkey_$deviceId';
-
-  Future<int> _loadStoredKey() async {
-    final p = await SharedPreferences.getInstance();
-    return p.getInt(_keyPrefKey) ?? kDefaultDeviceKey;
-  }
-
-  Future<void> _storeKey(int key) async {
-    final p = await SharedPreferences.getInstance();
-    await p.setInt(_keyPrefKey, key);
-  }
-
   Future<void> _writeKey(BluetoothCharacteristic c, int key) async {
     final b = ByteData(4)..setUint32(0, key, Endian.little);
     await c.write(b.buffer.asUint8List(), withoutResponse: false);
   }
 
-  // Beim Connect: Auth-Status abonnieren + gespeicherten Code an CHR_AUTH senden.
+  // Beim Connect: Auth-Status abonnieren. Es wird KEIN gespeicherter Code mehr
+  // automatisch gesendet -> ohne Session-Key bleibt die Verbindung gesperrt und die
+  // App zeigt das LockGate (Code-Eingabe noetig, auch beim ersten Verbinden).
+  // Nur wenn in dieser Sitzung bereits ein Code erfolgreich eingegeben wurde
+  // (_sessionKey), wird er still gesendet - damit interne Reconnects (Cloud-Upload)
+  // nicht erneut nach dem Code fragen.
   // Alte Firmware ohne CHR_AUTH -> authSupported=false, alles gilt als frei.
   Future<void> _authenticate() async {
     final c = _chars[EyeUuids.chrAuth];
@@ -159,11 +156,13 @@ class EyeBle extends ChangeNotifier {
         if (init.isNotEmpty) authorized = init[0] == 1;
       } catch (_) {}
     }
-    await _writeKey(c, await _loadStoredKey());
-    // Kurz auf die Autorisierungs-Antwort warten, damit das Sperr-Gate auf dem
-    // eigenen (berechtigten) Handy gar nicht erst aufblitzt.
-    for (int i = 0; i < 16 && !authorized; i++) {
-      await Future.delayed(const Duration(milliseconds: 50));
+    if (_sessionKey != null) {
+      await _writeKey(c, _sessionKey!);
+      // Kurz auf die Autorisierungs-Antwort warten, damit das Gate beim stillen
+      // Reconnect nicht aufblitzt.
+      for (int i = 0; i < 16 && !authorized; i++) {
+        await Future.delayed(const Duration(milliseconds: 50));
+      }
     }
   }
 
@@ -180,21 +179,22 @@ class EyeBle extends ChangeNotifier {
       await Future.delayed(const Duration(milliseconds: 50));
     }
     if (authorized) {
-      await _storeKey(key);   // korrekter Code -> fuer Auto-Login merken
+      _sessionKey = key;   // korrekter Code -> nur fuer diese Sitzung merken (RAM)
       return true;
     }
-    authAttempts++;           // falscher Code -> UI-Feedback
+    authAttempts++;        // falscher Code -> UI-Feedback
     notifyListeners();
     return false;
   }
 
-  /// Aendert den Geraete-Key (nur wenn autorisiert). Speichert ihn lokal, damit der
-  /// naechste Connect automatisch mit dem neuen Code authentifiziert.
+  /// Aendert den Geraete-Key (nur wenn autorisiert). Merkt sich den neuen Code nur
+  /// fuer diese Sitzung, damit ein stiller Reconnect ihn nutzt - beim naechsten
+  /// App-Start wird wieder danach gefragt.
   Future<bool> changeDeviceKey(int newKey) async {
     final c = _chars[EyeUuids.chrSetKey];
     if (c == null || newKey < 0 || newKey > 999999) return false;
     await _writeKey(c, newKey);
-    await _storeKey(newKey);
+    _sessionKey = newKey;
     return true;
   }
 
@@ -217,7 +217,11 @@ class EyeBle extends ChangeNotifier {
     await connectAndDiscover(device!);
   }
 
-  Future<void> disconnect() async {
+  /// [forget]=true vergisst den Sitzungs-Code -> der naechste Connect verlangt wieder
+  /// die PIN (fuer den vom Nutzer ausgeloesten Trennen-Button). Der interne
+  /// Cloud-Upload-Ablauf ruft disconnect() ohne forget, damit sein automatischer
+  /// Reconnect still bleibt.
+  Future<void> disconnect({bool forget = false}) async {
     await _subEyeId?.cancel();
     await _subSlaveLink?.cancel();
     await _subSlaveReceipt?.cancel();
@@ -229,6 +233,7 @@ class EyeBle extends ChangeNotifier {
     authorized = false;
     authSupported = false;
     slaveLinked = false;
+    if (forget) _sessionKey = null;
     notifyListeners();
   }
 

@@ -68,7 +68,7 @@ class _LockGateState extends State<LockGate> {
                 style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
             const SizedBox(height: 8),
             Text(
-              'Dieses Augenpaar ist geschuetzt. Gib den 6-stelligen Zugangscode ein, um die Steuerung freizuschalten.',
+              'Dieses Augenpaar ist geschuetzt. Der 6-stellige Zugangscode ist bei jedem Verbinden noetig - gib ihn ein, um die Steuerung freizuschalten.',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 14, color: Colors.white.withOpacity(.6), height: 1.4),
             ),

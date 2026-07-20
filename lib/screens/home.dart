@@ -115,7 +115,7 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: const Icon(Icons.logout),
             tooltip: 'Trennen',
             onPressed: () async {
-              await ble.disconnect();
+              await ble.disconnect(forget: true);
               if (mounted) Navigator.of(context).pop();
             },
           ),

@@ -62,7 +62,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           controller: ctrl,
           autofocus: true,
           maxLength: 23,
-          decoration: const InputDecoration(hintText: 'z.B. Gondel oben'),
+          decoration: const InputDecoration(hintText: 'z.B. Augen Thomas'),
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Abbrechen')),
