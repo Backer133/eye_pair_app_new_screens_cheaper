@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import '../ble_service.dart';
 import '../theme.dart';
 
@@ -11,6 +12,24 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
+  // App-Version (aus dem Paket -> folgt automatisch der pubspec-Version).
+  String _version = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _loadVersion();
+  }
+
+  Future<void> _loadVersion() async {
+    try {
+      final info = await PackageInfo.fromPlatform();
+      if (mounted) {
+        setState(() => _version = 'Version ${info.version} (Build ${info.buildNumber})');
+      }
+    } catch (_) {}
+  }
+
   // Dialog fuer 6-stellige Code-Eingabe. Gibt die Zahl zurueck oder null.
   Future<int?> _promptCode(String title, String hint) async {
     final ctrl = TextEditingController();
@@ -172,6 +191,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   fontSize: 11,
                   color: Colors.white.withOpacity(.35),
                   fontStyle: FontStyle.italic,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Center(
+              child: Text(
+                _version.isEmpty ? '' : _version,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: Colors.white.withOpacity(.30),
                 ),
                 textAlign: TextAlign.center,
               ),
