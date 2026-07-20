@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'ble_service.dart';
+import 'theme.dart';
 import 'screens/discovery.dart';
 
 void main() {
@@ -18,11 +19,11 @@ class _EyePairAppState extends State<EyePairApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'EyePair',
-      theme: ThemeData(
-        useMaterial3: true,
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo, brightness: Brightness.dark),
-      ),
+      title: 'SBP Eye Settings',
+      debugShowCheckedModeBanner: false,
+      themeMode: ThemeMode.dark,
+      darkTheme: buildDarkTheme(),
+      theme: buildDarkTheme(),
       home: DiscoveryScreen(ble: ble),
     );
   }

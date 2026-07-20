@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import '../ble_service.dart';
+import '../theme.dart';
 
 class SettingsScreen extends StatefulWidget {
   final EyeBle ble;
@@ -10,14 +11,6 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  late bool _anim;
-
-  @override
-  void initState() {
-    super.initState();
-    _anim = widget.ble.animEnabled == 1;
-  }
-
   // Dialog fuer 6-stellige Code-Eingabe. Gibt die Zahl zurueck oder null.
   Future<int?> _promptCode(String title, String hint) async {
     final ctrl = TextEditingController();
@@ -54,15 +47,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(ok
-          ? 'Zugangscode geaendert'
+          ? 'Zugangscode geaendert - gilt ab sofort'
           : 'Konnte Code nicht setzen (nicht autorisiert?)'),
     ));
-  }
-
-  Future<void> _enterCode() async {
-    final code = await _promptCode('Zugangscode eingeben', '6-stellig');
-    if (code == null) return;
-    await widget.ble.authenticateWith(code);
   }
 
   Future<void> _renameDevice() async {
@@ -102,80 +89,88 @@ class _SettingsScreenState extends State<SettingsScreen> {
       listenable: widget.ble,
       builder: (context, _) {
         final ble = widget.ble;
+        final animOn = ble.animEnabled == 1;
         return ListView(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
           children: [
-            // Anzeigename dieses Augenpaars - so unterscheidest du mehrere Paare.
+            // ---- Augenpaar ----
+            const SectionHeader('Augenpaar', icon: Icons.remove_red_eye),
             Card(
               child: ListTile(
-                leading: const Icon(Icons.remove_red_eye),
-                title: Text(ble.deviceName.isEmpty ? 'Augenpaar' : ble.deviceName),
-                subtitle: const Text('Name in der Geraeteliste'),
-                trailing: ble.authorized
-                    ? IconButton(
-                        icon: const Icon(Icons.edit),
-                        tooltip: 'Umbenennen',
-                        onPressed: _renameDevice,
-                      )
-                    : null,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                leading: _iconBox(Icons.badge_outlined, kAccentGlow),
+                title: Text(ble.deviceName.isEmpty ? 'Augenpaar' : ble.deviceName,
+                    style: const TextStyle(fontWeight: FontWeight.w700)),
+                subtitle: const Text('Bluetooth-Name in der Geraeteliste'),
+                trailing: FilledButton.tonalIcon(
+                  onPressed: _renameDevice,
+                  icon: const Icon(Icons.edit, size: 18),
+                  label: const Text('Umbenennen'),
+                ),
               ),
             ),
-            const SizedBox(height: 8),
+
+            // ---- Anzeige ----
+            const SectionHeader('Anzeige', icon: Icons.tune),
             Card(
               child: SwitchListTile(
-                secondary: const Icon(Icons.movie_filter),
-                title: const Text('Animation'),
-                subtitle: Text(_anim
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                secondary: _iconBox(Icons.movie_filter_outlined, kAccentGlow),
+                title: const Text('Animation',
+                    style: TextStyle(fontWeight: FontWeight.w700)),
+                subtitle: Text(animOn
                     ? 'Augen-Animation laeuft'
                     : 'Augen zentriert (pausiert)'),
-                value: _anim,
-                onChanged: (v) {
-                  setState(() => _anim = v);
-                  ble.setAnimEnabled(v);
-                },
+                value: animOn,
+                activeColor: kAccent,
+                onChanged: (v) => ble.setAnimEnabled(v),
               ),
             ),
-            // Zugangsschutz nur anzeigen, wenn die Firmware ihn unterstuetzt.
+
+            // ---- Zugangsschutz ----
             if (ble.authSupported) ...[
-              const SizedBox(height: 8),
+              const SectionHeader('Zugangsschutz', icon: Icons.shield_outlined),
               Card(
                 child: Column(
                   children: [
                     ListTile(
-                      leading: Icon(
-                        ble.authorized ? Icons.lock_open : Icons.lock,
-                        color: ble.authorized ? Colors.green : Colors.orange,
-                      ),
-                      title: const Text('Zugang'),
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                      leading: _iconBox(
+                          ble.authorized ? Icons.lock_open : Icons.lock,
+                          ble.authorized ? kGood : kWarn),
+                      title: const Text('Status',
+                          style: TextStyle(fontWeight: FontWeight.w700)),
                       subtitle: Text(ble.authorized
-                          ? 'Autorisiert - Steuerung freigeschaltet'
-                          : 'Nicht autorisiert - Code noetig'),
-                      trailing: ble.authorized
-                          ? null
-                          : TextButton(
-                              onPressed: _enterCode,
-                              child: const Text('Code eingeben'),
-                            ),
-                    ),
-                    if (ble.authorized)
-                      ListTile(
-                        leading: const Icon(Icons.password),
-                        title: const Text('Zugangscode aendern'),
-                        subtitle: const Text(
-                            'Neuen 6-stelligen Code fuer dieses Augenpaar setzen'),
-                        onTap: _changeKey,
+                          ? 'Steuerung freigeschaltet'
+                          : 'Nicht autorisiert'),
+                      trailing: StatusPill(
+                        ble.authorized ? 'Autorisiert' : 'Gesperrt',
+                        color: ble.authorized ? kGood : kWarn,
+                        icon: ble.authorized ? Icons.check : Icons.lock,
                       ),
+                    ),
+                    const Divider(height: 1),
+                    ListTile(
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                      leading: _iconBox(Icons.password, kAccentGlow),
+                      title: const Text('Zugangscode aendern',
+                          style: TextStyle(fontWeight: FontWeight.w700)),
+                      subtitle: const Text('Neuen 6-stelligen Code fuer dieses Augenpaar'),
+                      trailing: const Icon(Icons.chevron_right, color: Colors.white38),
+                      onTap: _changeKey,
+                    ),
                   ],
                 ),
               ),
             ],
-            const SizedBox(height: 32),
-            const Center(
+
+            const SizedBox(height: 36),
+            Center(
               child: Text(
-                'Created by Thomas Paul for Schafberg-Pass Sankt Gilgen',
+                'Created by Thomas Paul for\nSchafberg-Pass Sankt Gilgen',
                 style: TextStyle(
                   fontSize: 11,
-                  color: Colors.grey,
+                  color: Colors.white.withOpacity(.35),
                   fontStyle: FontStyle.italic,
                 ),
                 textAlign: TextAlign.center,
@@ -184,6 +179,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ],
         );
       },
+    );
+  }
+
+  Widget _iconBox(IconData icon, Color color) {
+    return Container(
+      width: 40, height: 40,
+      decoration: BoxDecoration(
+        color: color.withOpacity(.14),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Icon(icon, color: color, size: 20),
     );
   }
 }

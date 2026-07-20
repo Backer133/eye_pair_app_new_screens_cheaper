@@ -65,6 +65,8 @@ class EyeBle extends ChangeNotifier {
   // Zugangsschutz: true = Verbindung ist autorisiert (Steuerung freigeschaltet).
   bool authorized = false;
   bool authSupported = false;  // false = alte Firmware ohne Auth-Charakteristik
+  // Zaehlt hoch bei jedem fehlgeschlagenen Code-Versuch (fuer UI-Feedback).
+  int authAttempts = 0;
   StreamSubscription<List<int>>? _subAuthStatus;
   // Frei waehlbarer Anzeigename dieses Augenpaars (aus CHR_DEVICE_NAME).
   String deviceName = "";
@@ -114,6 +116,10 @@ class EyeBle extends ChangeNotifier {
   /// gespeicherte Daten benutzt (Zugangscode, Cloud-Slot-Metadaten).
   String get deviceId => device?.remoteId.str ?? 'unknown';
 
+  /// true = Firmware verlangt Autorisierung, aber wir sind (noch) nicht
+  /// autorisiert -> die App muss die Steuerung sperren (Zugangs-Gate zeigen).
+  bool get locked => authSupported && !authorized;
+
   String get _keyPrefKey => 'devkey_$deviceId';
 
   Future<int> _loadStoredKey() async {
@@ -154,15 +160,32 @@ class EyeBle extends ChangeNotifier {
       } catch (_) {}
     }
     await _writeKey(c, await _loadStoredKey());
+    // Kurz auf die Autorisierungs-Antwort warten, damit das Sperr-Gate auf dem
+    // eigenen (berechtigten) Handy gar nicht erst aufblitzt.
+    for (int i = 0; i < 16 && !authorized; i++) {
+      await Future.delayed(const Duration(milliseconds: 50));
+    }
   }
 
   /// Manuelle Code-Eingabe (falls der gespeicherte Code nicht passt, z.B. anderer
-  /// Nutzer / Admin-Key). Merkt sich den Code fuer dieses Geraet.
-  Future<void> authenticateWith(int key) async {
+  /// Nutzer / Admin-Key). Sendet den Code, wartet auf die Autorisierungs-Antwort
+  /// der Firmware und merkt sich den Code NUR bei Erfolg. Gibt true zurueck, wenn
+  /// die Verbindung danach autorisiert ist.
+  Future<bool> authenticateWith(int key) async {
     final c = _chars[EyeUuids.chrAuth];
-    if (c == null) return;
+    if (c == null) return false;
     await _writeKey(c, key);
-    await _storeKey(key);
+    // Auf die CHR_AUTH_STATUS-Notify der Firmware warten (bis ~1s).
+    for (int i = 0; i < 20 && !authorized; i++) {
+      await Future.delayed(const Duration(milliseconds: 50));
+    }
+    if (authorized) {
+      await _storeKey(key);   // korrekter Code -> fuer Auto-Login merken
+      return true;
+    }
+    authAttempts++;           // falscher Code -> UI-Feedback
+    notifyListeners();
+    return false;
   }
 
   /// Aendert den Geraete-Key (nur wenn autorisiert). Speichert ihn lokal, damit der
@@ -281,6 +304,7 @@ class EyeBle extends ChangeNotifier {
   }
 
   Future<void> setEyeId(int id) async {
+    if (locked) return;   // Firmware ignoriert den Write ohnehin -> nicht optimistisch anzeigen
     final c = _chars[EyeUuids.chrEyeId]; if (c == null) return;
     await c.write([id], withoutResponse: false);
     eyeId = id; notifyListeners();
@@ -289,6 +313,7 @@ class EyeBle extends ChangeNotifier {
   // setBrightness entfernt - Funktioniert auf ESP32-C3 mit Arduino Core 2.x nicht zuverlaessig.
 
   Future<void> setAnimEnabled(bool en) async {
+    if (locked) return;
     final c = _chars[EyeUuids.chrAnimEn]; if (c == null) return;
     await c.write([en ? 1 : 0], withoutResponse: false);
     animEnabled = en ? 1 : 0; notifyListeners();
@@ -305,6 +330,7 @@ class EyeBle extends ChangeNotifier {
 
   Future<bool> uploadEye(int slot, Uint8List rgb565data,
                           {void Function(int sent, int total)? onProgress}) async {
+    if (locked) return false;
     final c = _chars[EyeUuids.chrEyeUpload];
     if (c == null) return false;
     if (slot < 0 || slot >= kCloudSlotCount) return false;
@@ -337,6 +363,7 @@ class EyeBle extends ChangeNotifier {
 
   /// Loescht den Cloud-Slot auf Master + Slave.
   Future<void> deleteEye(int slot) async {
+    if (locked) return;
     final c = _chars[EyeUuids.chrEyeUpload];
     if (c == null) return;
     if (slot < 0 || slot >= kCloudSlotCount) return;

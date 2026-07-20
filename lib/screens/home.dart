@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import '../ble_service.dart';
 import '../slot_metadata.dart';
+import '../theme.dart';
 import 'settings.dart';
 import 'diagnostics.dart';
 import 'cloud_eyes_screen.dart';
+import 'lock_gate.dart';
 
 class HomeScreen extends StatefulWidget {
   final EyeBle ble;
@@ -80,46 +82,72 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   Widget build(BuildContext context) {
     final ble = widget.ble;
+    final locked = ble.locked;
+    final title = ble.deviceName.isNotEmpty
+        ? ble.deviceName
+        : (ble.device?.platformName.isNotEmpty == true
+            ? ble.device!.platformName
+            : 'Augenpaar');
+
     final screens = [
       _EyeGrid(ble: ble, slotMeta: _slotMeta, onDeleteSlot: _deleteSlot),
       CloudEyesScreen(ble: ble, onSlotMetaChanged: _loadSlotMeta),
       SettingsScreen(ble: ble),
       DiagnosticsScreen(ble: ble),
     ];
+
+    // Verbindungs-/Sperr-Indikator oben rechts.
+    final Widget statusIcon;
+    if (!ble.connected) {
+      statusIcon = const _StatusDot(icon: Icons.bluetooth_disabled, color: kBad);
+    } else if (locked) {
+      statusIcon = const _StatusDot(icon: Icons.lock, color: kWarn);
+    } else {
+      statusIcon = const _StatusDot(icon: Icons.bluetooth_connected, color: kGood);
+    }
+
     return Scaffold(
       appBar: AppBar(
-        title: Text(ble.device?.platformName ?? 'EyePair'),
+        title: Text(title, overflow: TextOverflow.ellipsis),
         actions: [
-          if (ble.connected)
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 12),
-              child: Icon(Icons.bluetooth_connected, color: Colors.lightGreen),
-            )
-          else
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 12),
-              child: Icon(Icons.bluetooth_disabled, color: Colors.red),
-            ),
+          statusIcon,
           IconButton(
-            icon: const Icon(Icons.link_off),
+            icon: const Icon(Icons.logout),
+            tooltip: 'Trennen',
             onPressed: () async {
               await ble.disconnect();
               if (mounted) Navigator.of(context).pop();
             },
           ),
+          const SizedBox(width: 4),
         ],
       ),
-      body: screens[_tab],
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _tab,
-        onDestinationSelected: (i) => setState(() => _tab = i),
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.grid_view), label: 'Augen'),
-          NavigationDestination(icon: Icon(Icons.cloud_download), label: 'Cloud'),
-          NavigationDestination(icon: Icon(Icons.settings), label: 'Einstellungen'),
-          NavigationDestination(icon: Icon(Icons.analytics), label: 'Diagnose'),
-        ],
-      ),
+      body: locked ? LockGate(ble: ble) : screens[_tab],
+      bottomNavigationBar: locked
+          ? null
+          : NavigationBar(
+              selectedIndex: _tab,
+              onDestinationSelected: (i) => setState(() => _tab = i),
+              destinations: const [
+                NavigationDestination(icon: Icon(Icons.grid_view), label: 'Augen'),
+                NavigationDestination(icon: Icon(Icons.cloud_download), label: 'Cloud'),
+                NavigationDestination(icon: Icon(Icons.settings), label: 'Einstellungen'),
+                NavigationDestination(icon: Icon(Icons.analytics), label: 'Diagnose'),
+              ],
+            ),
+    );
+  }
+}
+
+class _StatusDot extends StatelessWidget {
+  final IconData icon;
+  final Color color;
+  const _StatusDot({required this.icon, required this.color});
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 8),
+      child: Icon(icon, color: color, size: 22),
     );
   }
 }
@@ -152,18 +180,28 @@ class _EyeGrid extends StatelessWidget {
         // Wichtig nach Reinstall: lokale Metadaten weg, aber Master hat die Bilder noch.
         final occupied = isCloud && (ble.slotOccupiedMask & (1 << cloudSlot)) != 0;
         final selected = i == ble.eyeId;
-        return Material(
-          color: selected
-              ? Theme.of(context).colorScheme.primaryContainer
-              : Theme.of(context).colorScheme.surfaceContainerHighest,
-          borderRadius: BorderRadius.circular(16),
-          child: InkWell(
-            borderRadius: BorderRadius.circular(16),
-            onTap: () => ble.setEyeId(i),
-            onLongPress: isCloud ? () => onDeleteSlot(cloudSlot) : null,
-            child: Padding(
-              padding: const EdgeInsets.all(8),
-              child: Column(
+        return Container(
+          decoration: BoxDecoration(
+            color: kSurface,
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(
+              color: selected ? kAccent : Colors.white.withOpacity(.06),
+              width: selected ? 2 : 1,
+            ),
+            boxShadow: selected
+                ? [BoxShadow(color: kAccent.withOpacity(.35), blurRadius: 16, spreadRadius: -2)]
+                : null,
+          ),
+          child: Material(
+            color: Colors.transparent,
+            borderRadius: BorderRadius.circular(18),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(18),
+              onTap: () => ble.setEyeId(i),
+              onLongPress: isCloud ? () => onDeleteSlot(cloudSlot) : null,
+              child: Padding(
+                padding: const EdgeInsets.all(8),
+                child: Column(
                 children: [
                   Expanded(
                     child: ClipRRect(
@@ -217,6 +255,7 @@ class _EyeGrid extends StatelessWidget {
                     ),
                   ),
                 ],
+              ),
               ),
             ),
           ),

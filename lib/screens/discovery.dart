@@ -1,10 +1,12 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../ble_service.dart';
+import '../theme.dart';
 import 'home.dart';
 
 class DiscoveryScreen extends StatefulWidget {
@@ -14,15 +16,22 @@ class DiscoveryScreen extends StatefulWidget {
   State<DiscoveryScreen> createState() => _DiscoveryScreenState();
 }
 
-class _DiscoveryScreenState extends State<DiscoveryScreen> {
+class _DiscoveryScreenState extends State<DiscoveryScreen>
+    with SingleTickerProviderStateMixin {
   final List<ScanResult> _results = [];
   StreamSubscription<List<ScanResult>>? _subScan;
   bool _scanning = false;
   String? _error;
+  String? _connectingId;   // remoteId des Geraets, zu dem gerade verbunden wird
+  late final AnimationController _pulse;
 
   @override
   void initState() {
     super.initState();
+    _pulse = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1800),
+    )..repeat();
     _start();
   }
 
@@ -56,7 +65,6 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> {
       for (final r in rs) {
         // Kein Name-Prefix-Filter mehr - der Service-UUID-Filter in startScan()
         // sortiert schon BLE-seitig alles Nicht-EyePair-Geraet aus.
-        // Damit erscheinen "Augen Thomas", "Augen Hias", ... korrekt.
         final idx = _results.indexWhere((x) => x.device.remoteId == r.device.remoteId);
         if (idx >= 0) {
           _results[idx] = r;
@@ -64,6 +72,8 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> {
           _results.add(r);
         }
       }
+      // Staerkstes Signal zuerst.
+      _results.sort((a, b) => b.rssi.compareTo(a.rssi));
       setState(() {});
     });
     try {
@@ -75,24 +85,33 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> {
     } catch (e) {
       setState(() => _error = "Scan-Fehler: $e");
     }
-    setState(() => _scanning = false);
+    if (mounted) setState(() => _scanning = false);
   }
 
   Future<void> _connect(ScanResult r) async {
+    setState(() => _connectingId = r.device.remoteId.str);
     try {
       await FlutterBluePlus.stopScan();
       await widget.ble.connectAndDiscover(r.device);
       if (!mounted) return;
-      Navigator.of(context).push(MaterialPageRoute(
+      setState(() => _connectingId = null);
+      await Navigator.of(context).push(MaterialPageRoute(
         builder: (_) => HomeScreen(ble: widget.ble),
       ));
+      // Zurueck von Home -> erneut scannen.
+      if (mounted) _scan();
     } catch (e) {
-      setState(() => _error = "Verbindungs-Fehler: $e");
+      if (!mounted) return;
+      setState(() {
+        _connectingId = null;
+        _error = "Verbindungs-Fehler: $e";
+      });
     }
   }
 
   @override
   void dispose() {
+    _pulse.dispose();
     _subScan?.cancel();
     FlutterBluePlus.stopScan();
     super.dispose();
@@ -101,46 +120,218 @@ class _DiscoveryScreenState extends State<DiscoveryScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('EyePair finden'),
-        actions: [
-          IconButton(
-            icon: Icon(_scanning ? Icons.refresh : Icons.search),
-            onPressed: _scanning ? null : _scan,
+      body: SafeArea(
+        child: Column(
+          children: [
+            _header(),
+            if (_error != null) _errorBar(_error!),
+            Expanded(
+              child: _results.isEmpty ? _emptyState() : _deviceList(),
+            ),
+          ],
+        ),
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _scanning ? null : _scan,
+        backgroundColor: _scanning ? kSurfaceHi : kAccent,
+        icon: _scanning
+            ? const SizedBox(
+                width: 18, height: 18,
+                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white70))
+            : const Icon(Icons.refresh, color: Colors.white),
+        label: Text(_scanning ? 'Suche laeuft' : 'Neu suchen',
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+      ),
+    );
+  }
+
+  Widget _header() {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 24, 20, 8),
+      child: Row(
+        children: [
+          Container(
+            width: 44, height: 44,
+            decoration: BoxDecoration(
+              color: kAccent.withOpacity(.16),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: const Icon(Icons.remove_red_eye, color: kAccentGlow),
+          ),
+          const SizedBox(width: 14),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('SBP Eye Settings',
+                  style: TextStyle(fontSize: 20, fontWeight: FontWeight.w800)),
+              Text(
+                _scanning
+                    ? 'Suche nach Augenpaaren...'
+                    : '${_results.length} Augenpaar${_results.length == 1 ? '' : 'e'} gefunden',
+                style: TextStyle(fontSize: 13, color: Colors.white.withOpacity(.55)),
+              ),
+            ],
           ),
         ],
       ),
-      body: Column(
+    );
+  }
+
+  Widget _errorBar(String msg) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: kBad.withOpacity(.12),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: kBad.withOpacity(.4)),
+      ),
+      child: Row(
         children: [
-          if (_error != null)
-            Container(
-              padding: const EdgeInsets.all(8),
-              color: Colors.red.withOpacity(.2),
-              width: double.infinity,
-              child: Text(_error!),
+          const Icon(Icons.error_outline, color: kBad, size: 20),
+          const SizedBox(width: 10),
+          Expanded(child: Text(msg, style: const TextStyle(color: kBad, fontSize: 13))),
+        ],
+      ),
+    );
+  }
+
+  Widget _emptyState() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          _radar(),
+          const SizedBox(height: 28),
+          Text(
+            _scanning ? 'Suche Augenpaare...' : 'Keine Augenpaare gefunden',
+            style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 8),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 40),
+            child: Text(
+              _scanning
+                  ? 'Augen einschalten und in der Naehe bleiben.'
+                  : 'Stelle sicher, dass die Augen mit Strom versorgt sind, und tippe auf "Neu suchen".',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 13, color: Colors.white.withOpacity(.5), height: 1.4),
             ),
-          if (_scanning) const LinearProgressIndicator(),
-          Expanded(
-            child: _results.isEmpty
-                ? Center(
-                    child: Text(_scanning
-                        ? 'Suche EyePair-Geraete...'
-                        : 'Keine Geraete gefunden.\nButton oben rechts erneut scannen.'),
-                  )
-                : ListView.builder(
-                    itemCount: _results.length,
-                    itemBuilder: (_, i) {
-                      final r = _results[i];
-                      return ListTile(
-                        leading: const Icon(Icons.remove_red_eye, size: 32),
-                        title: Text(r.advertisementData.advName),
-                        subtitle: Text('${r.device.remoteId}  •  RSSI ${r.rssi} dBm'),
-                        onTap: () => _connect(r),
-                      );
-                    },
-                  ),
           ),
         ],
+      ),
+    );
+  }
+
+  /// Pulsierender Radar-Ring waehrend der Suche (statisch, wenn nicht gescannt).
+  Widget _radar() {
+    return SizedBox(
+      width: 160, height: 160,
+      child: AnimatedBuilder(
+        animation: _pulse,
+        builder: (_, child) {
+          return Stack(
+            alignment: Alignment.center,
+            children: [
+              if (_scanning) ...[
+                _ring(_pulse.value),
+                _ring((_pulse.value + 0.5) % 1.0),
+              ],
+              Container(
+                width: 76, height: 76,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: kAccent.withOpacity(.16),
+                  border: Border.all(color: kAccent.withOpacity(.5), width: 2),
+                ),
+                child: Icon(
+                  _scanning ? Icons.bluetooth_searching : Icons.bluetooth_disabled,
+                  color: kAccentGlow, size: 34,
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _ring(double t) {
+    final size = 76 + t * 84;
+    return Container(
+      width: size, height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        border: Border.all(color: kAccent.withOpacity((1 - t) * 0.5)),
+      ),
+    );
+  }
+
+  Widget _deviceList() {
+    return ListView.separated(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 100),
+      itemCount: _results.length,
+      separatorBuilder: (_, __) => const SizedBox(height: 12),
+      itemBuilder: (_, i) => _deviceCard(_results[i]),
+    );
+  }
+
+  Widget _deviceCard(ScanResult r) {
+    final name = r.advertisementData.advName.isNotEmpty
+        ? r.advertisementData.advName
+        : (r.device.platformName.isNotEmpty ? r.device.platformName : 'Augenpaar');
+    final connecting = _connectingId == r.device.remoteId.str;
+
+    return Card(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: connecting ? null : () => _connect(r),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Row(
+            children: [
+              Container(
+                width: 52, height: 52,
+                decoration: BoxDecoration(
+                  color: kAccent.withOpacity(.14),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: const Icon(Icons.remove_red_eye, color: kAccentGlow, size: 26),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(name,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        SignalBars(r.rssi),
+                        const SizedBox(width: 8),
+                        Text('${r.rssi} dBm',
+                            style: TextStyle(
+                                fontSize: 12, color: Colors.white.withOpacity(.5))),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              connecting
+                  ? const SizedBox(
+                      width: 22, height: 22,
+                      child: CircularProgressIndicator(strokeWidth: 2.4, color: kAccentGlow))
+                  : Transform.rotate(
+                      angle: -math.pi / 4,
+                      child: Icon(Icons.arrow_forward, color: Colors.white.withOpacity(.4)),
+                    ),
+            ],
+          ),
+        ),
       ),
     );
   }

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../ble_service.dart';
+import '../theme.dart';
 
 class DiagnosticsScreen extends StatelessWidget {
   final EyeBle ble;
@@ -13,26 +14,36 @@ class DiagnosticsScreen extends StatelessWidget {
       builder: (context, _) {
         final linked = ble.slaveLinked;
         return ListView(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
           children: [
+            const SectionHeader('Verbindung', icon: Icons.cable),
             _bigCard(
               icon: linked ? Icons.cable : Icons.link_off,
-              color: linked ? Colors.green : Colors.orange,
+              color: linked ? kGood : kWarn,
               title: 'Zweiter Screen',
               value: linked ? 'Verbunden' : 'Nicht verbunden',
               sub: linked
                   ? 'Slave meldet sich ueber das Kabel'
                   : 'Kein Lebenszeichen - Kabel pruefen oder Slave stromlos',
             ),
-            _row(Icons.remove_red_eye, 'Augenpaar',
-                 ble.deviceName.isEmpty ? '--' : ble.deviceName),
-            _row(Icons.image, 'Aktuelles Auge',
-                 ble.eyeId < kEyeLabels.length ? kEyeLabels[ble.eyeId] : '?'),
-            _row(Icons.animation, 'Animation',
-                 ble.animEnabled == 1 ? 'an' : 'aus'),
-            if (ble.authSupported)
-              _row(ble.authorized ? Icons.lock_open : Icons.lock, 'Zugang',
-                   ble.authorized ? 'autorisiert' : 'gesperrt'),
+            const SectionHeader('Zustand', icon: Icons.info_outline),
+            _infoCard(
+              rows: [
+                _RowData(Icons.remove_red_eye, 'Augenpaar',
+                    ble.deviceName.isEmpty ? '--' : ble.deviceName),
+                _RowData(Icons.image, 'Aktuelles Auge',
+                    ble.eyeId < kEyeLabels.length ? kEyeLabels[ble.eyeId] : '?'),
+                _RowData(Icons.animation, 'Animation',
+                    ble.animEnabled == 1 ? 'An' : 'Aus'),
+                if (ble.authSupported)
+                  _RowData(
+                    ble.authorized ? Icons.lock_open : Icons.lock,
+                    'Zugang',
+                    ble.authorized ? 'Autorisiert' : 'Gesperrt',
+                    pillColor: ble.authorized ? kGood : kWarn,
+                  ),
+              ],
+            ),
           ],
         );
       },
@@ -46,18 +57,30 @@ class DiagnosticsScreen extends StatelessWidget {
         padding: const EdgeInsets.all(20),
         child: Row(
           children: [
-            Icon(icon, size: 48, color: color),
-            const SizedBox(width: 16),
+            Container(
+              width: 64, height: 64,
+              decoration: BoxDecoration(
+                color: color.withOpacity(.14),
+                borderRadius: BorderRadius.circular(18),
+              ),
+              child: Icon(icon, size: 32, color: color),
+            ),
+            const SizedBox(width: 18),
             Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(title, style: const TextStyle(fontSize: 14, color: Colors.grey)),
+                  Text(title,
+                      style: TextStyle(fontSize: 13, color: Colors.white.withOpacity(.5))),
                   const SizedBox(height: 4),
                   Text(value,
-                      style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: color)),
-                  if (sub != null)
-                    Text(sub, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+                      style: TextStyle(
+                          fontSize: 22, fontWeight: FontWeight.w800, color: color)),
+                  if (sub != null) ...[
+                    const SizedBox(height: 4),
+                    Text(sub,
+                        style: TextStyle(fontSize: 12, color: Colors.white.withOpacity(.45))),
+                  ],
                 ],
               ),
             ),
@@ -67,14 +90,36 @@ class DiagnosticsScreen extends StatelessWidget {
     );
   }
 
-  Widget _row(IconData icon, String label, String value) {
+  Widget _infoCard({required List<_RowData> rows}) {
     return Card(
-      child: ListTile(
-        leading: Icon(icon),
-        title: Text(label),
-        trailing: Text(value,
-            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+      child: Column(
+        children: [
+          for (int i = 0; i < rows.length; i++) ...[
+            if (i > 0) const Divider(height: 1),
+            _row(rows[i]),
+          ],
+        ],
       ),
     );
   }
+
+  Widget _row(_RowData d) {
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      leading: Icon(d.icon, color: Colors.white54, size: 22),
+      title: Text(d.label, style: const TextStyle(fontSize: 15)),
+      trailing: d.pillColor != null
+          ? StatusPill(d.value, color: d.pillColor!)
+          : Text(d.value,
+              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
+    );
+  }
+}
+
+class _RowData {
+  final IconData icon;
+  final String label;
+  final String value;
+  final Color? pillColor;
+  _RowData(this.icon, this.label, this.value, {this.pillColor});
 }
