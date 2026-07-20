@@ -31,8 +31,6 @@ class DiagnosticsScreen extends StatelessWidget {
               rows: [
                 _RowData(Icons.remove_red_eye, 'Augenpaar',
                     ble.deviceName.isEmpty ? '--' : ble.deviceName),
-                _RowData(Icons.image, 'Aktuelles Auge',
-                    ble.eyeId < kEyeLabels.length ? kEyeLabels[ble.eyeId] : '?'),
                 _RowData(Icons.animation, 'Animation',
                     ble.animEnabled == 1 ? 'An' : 'Aus'),
                 if (ble.authSupported)

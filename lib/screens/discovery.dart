@@ -20,9 +20,12 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
     with SingleTickerProviderStateMixin {
   final List<ScanResult> _results = [];
   StreamSubscription<List<ScanResult>>? _subScan;
-  bool _scanning = false;
+  StreamSubscription<bool>? _subScanning;
+  bool _scanning = false;   // vom echten BLE-Stack (FlutterBluePlus.isScanning)
+  bool _starting = false;   // _scan() laeuft gerade (Stop/Debounce/Start)
   String? _error;
   String? _connectingId;   // remoteId des Geraets, zu dem gerade verbunden wird
+  DateTime _lastScanStart = DateTime.fromMillisecondsSinceEpoch(0);
   late final AnimationController _pulse;
 
   @override
@@ -32,6 +35,27 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
       vsync: this,
       duration: const Duration(milliseconds: 1800),
     )..repeat();
+    // Scan-Status direkt vom BLE-Stack ableiten: bleibt bis zum Timeout true, damit
+    // der "Neu suchen"-Button waehrend eines laufenden Scans wirklich gesperrt ist
+    // (verhindert das schnelle Neu-Starten, das Android drosselt).
+    _subScanning = FlutterBluePlus.isScanning.listen((s) {
+      if (mounted) setState(() => _scanning = s);
+    });
+    // Ergebnisse DAUERHAFT mitschreiben und NICHT bei jedem Neu-Suchen loeschen -
+    // so verschwindet ein einmal gefundenes Auge nicht mehr aus der Liste, auch
+    // wenn ein spaeterer Scan (z.B. wegen Android-Drossel) nichts liefert.
+    _subScan = FlutterBluePlus.onScanResults.listen((rs) {
+      for (final r in rs) {
+        final idx = _results.indexWhere((x) => x.device.remoteId == r.device.remoteId);
+        if (idx >= 0) {
+          _results[idx] = r;
+        } else {
+          _results.add(r);
+        }
+      }
+      _results.sort((a, b) => b.rssi.compareTo(a.rssi));   // staerkstes Signal zuerst
+      if (mounted) setState(() {});
+    });
     _start();
   }
 
@@ -55,37 +79,32 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
   }
 
   Future<void> _scan() async {
-    setState(() {
-      _results.clear();
-      _scanning = true;
-      _error = null;
-    });
-    await _subScan?.cancel();
-    _subScan = FlutterBluePlus.onScanResults.listen((rs) {
-      for (final r in rs) {
-        // Kein Name-Prefix-Filter mehr - der Service-UUID-Filter in startScan()
-        // sortiert schon BLE-seitig alles Nicht-EyePair-Geraet aus.
-        final idx = _results.indexWhere((x) => x.device.remoteId == r.device.remoteId);
-        if (idx >= 0) {
-          _results[idx] = r;
-        } else {
-          _results.add(r);
-        }
-      }
-      // Staerkstes Signal zuerst.
-      _results.sort((a, b) => b.rssi.compareTo(a.rssi));
-      setState(() {});
-    });
+    if (_starting || _scanning) return;   // kein Doppelstart
+    setState(() { _starting = true; _error = null; });
     try {
+      // Laufenden Scan sauber stoppen.
+      if (FlutterBluePlus.isScanningNow) {
+        try { await FlutterBluePlus.stopScan(); } catch (_) {}
+      }
+      // Mindestabstand zwischen Scan-Starts: Android sperrt den Scanner nach zu
+      // vielen Starts (5 in 30 s) stumm. Der Gap haelt uns sicher darunter.
+      final since = DateTime.now().difference(_lastScanStart);
+      const minGap = Duration(seconds: 3);
+      if (since < minGap) await Future.delayed(minGap - since);
+      if (!mounted) return;
+      _lastScanStart = DateTime.now();
+      // onScanResults-Listener laeuft dauerhaft (siehe initState) -> Ergebnisse
+      // werden gemerged, nicht geloescht.
       await FlutterBluePlus.startScan(
         withServices: [EyeUuids.svcEyeCtrl],
-        timeout: const Duration(seconds: 10),
+        timeout: const Duration(seconds: 8),
         androidUsesFineLocation: false,
       );
     } catch (e) {
-      setState(() => _error = "Scan-Fehler: $e");
+      if (mounted) setState(() => _error = "Scan-Fehler: $e");
+    } finally {
+      if (mounted) setState(() => _starting = false);
     }
-    if (mounted) setState(() => _scanning = false);
   }
 
   Future<void> _connect(ScanResult r) async {
@@ -113,6 +132,7 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
   void dispose() {
     _pulse.dispose();
     _subScan?.cancel();
+    _subScanning?.cancel();
     FlutterBluePlus.stopScan();
     super.dispose();
   }
@@ -131,17 +151,20 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
           ],
         ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _scanning ? null : _scan,
-        backgroundColor: _scanning ? kSurfaceHi : kAccent,
-        icon: _scanning
-            ? const SizedBox(
-                width: 18, height: 18,
-                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white70))
-            : const Icon(Icons.refresh, color: Colors.white),
-        label: Text(_scanning ? 'Suche laeuft' : 'Neu suchen',
-            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
-      ),
+      floatingActionButton: Builder(builder: (_) {
+        final busy = _scanning || _starting;
+        return FloatingActionButton.extended(
+          onPressed: busy ? null : _scan,
+          backgroundColor: busy ? kSurfaceHi : kAccent,
+          icon: busy
+              ? const SizedBox(
+                  width: 18, height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white70))
+              : const Icon(Icons.refresh, color: Colors.white),
+          label: Text(busy ? 'Suche laeuft' : 'Neu suchen',
+              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+        );
+      }),
     );
   }
 
