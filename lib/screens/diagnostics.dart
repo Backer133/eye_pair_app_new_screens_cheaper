@@ -8,7 +8,7 @@ class DiagnosticsScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Live aktualisieren, sobald der Master einen neuen Kabel-Status meldet.
+    // Live aktualisieren, sobald der Master neue Funk-Diagnose meldet.
     return ListenableBuilder(
       listenable: ble,
       builder: (context, _) {
@@ -16,15 +16,24 @@ class DiagnosticsScreen extends StatelessWidget {
         return ListView(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
           children: [
-            const SectionHeader('Verbindung', icon: Icons.cable),
+            const SectionHeader('Funk-Verbindung (ESP-NOW)', icon: Icons.wifi),
             _bigCard(
-              icon: linked ? Icons.cable : Icons.link_off,
+              icon: linked ? Icons.wifi : Icons.wifi_off,
               color: linked ? kGood : kWarn,
-              title: 'Zweiter Screen',
-              value: linked ? 'Verbunden' : 'Nicht verbunden',
+              title: 'Zweiter Screen (Slave)',
+              value: ble.linkStateName,
               sub: linked
-                  ? 'Slave meldet sich ueber das Kabel'
-                  : 'Kein Lebenszeichen - Kabel pruefen oder Slave stromlos',
+                  ? 'Slave ist per Funk verbunden und synchron'
+                  : 'Kein Funk-Kontakt - Slave stromlos oder ausser Reichweite',
+            ),
+            const SectionHeader('Verbindungsqualitaet', icon: Icons.speed),
+            _infoCard(
+              rows: [
+                _RowData(Icons.schedule, 'Letztes Signal', _silenceText(ble.silenceMs),
+                    pillColor: _silenceColor(ble.silenceMs)),
+                _RowData(Icons.leak_remove, 'Verlustrate', '${ble.lossPct} %',
+                    pillColor: _lossColor(ble.lossPct)),
+              ],
             ),
             const SectionHeader('Zustand', icon: Icons.info_outline),
             _infoCard(
@@ -46,6 +55,24 @@ class DiagnosticsScreen extends StatelessWidget {
         );
       },
     );
+  }
+
+  static String _silenceText(int ms) {
+    if (ms <= 0) return 'gerade eben';
+    if (ms < 1000) return 'vor $ms ms';
+    return 'vor ${(ms / 1000).toStringAsFixed(1)} s';
+  }
+
+  static Color _silenceColor(int ms) {
+    if (ms < 1500) return kGood;
+    if (ms < 5000) return kWarn;
+    return kBad;
+  }
+
+  static Color _lossColor(int pct) {
+    if (pct <= 10) return kGood;
+    if (pct <= 40) return kWarn;
+    return kBad;
   }
 
   Widget _bigCard({required IconData icon, required Color color,

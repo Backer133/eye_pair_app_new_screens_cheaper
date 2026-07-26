@@ -24,8 +24,10 @@ class EyeUuids {
   static final Guid chrDeviceName   = Guid("6E40000E-B5A3-F393-E0A9-E50E24DCCA9E");  // READ/WRITE: Anzeigename
 
   static final Guid svcDiag      = Guid("6E400010-B5A3-F393-E0A9-E50E24DCCA9E");
-  // Kabel-Status: 1 = zweiter Screen (Slave) haengt am Kabel, 0 = nicht verbunden.
+  // Funk-Status: 1 = zweiter Screen (Slave) per ESP-NOW verbunden, 0 = nicht.
   static final Guid chrSlaveLink = Guid("6E400016-B5A3-F393-E0A9-E50E24DCCA9E");
+  // ESP-NOW-Verbindungsqualitaet: [0]=state, [1..2]=silence_ms (LE), [3]=loss_pct.
+  static final Guid chrLinkDiag  = Guid("6E400017-B5A3-F393-E0A9-E50E24DCCA9E");
 }
 
 const int kHardcodedEyeCount = 4;   // A7, A10, A12, A13 (in dieser Reihenfolge!)
@@ -57,9 +59,14 @@ class EyeBle extends ChangeNotifier {
   int brightness = 255;
   int animEnabled = 1;
   int eyeCount = 0;
-  // Kabel-Status: haengt der zweite Screen (Slave) am Kabel? Kommt aus dem
-  // Lebenszeichen, das der Slave ueber UART an den Master schickt.
+  // Funk-Status: haengt der zweite Screen (Slave) per ESP-NOW dran? Kommt aus dem
+  // Pair-State, den der Master ueber CHR_SLAVE_LINK meldet.
   bool slaveLinked = false;
+  // ESP-NOW-Funk-Diagnose (aus CHR_LINK_DIAG): Zustand + Qualitaet der Verbindung.
+  int linkState = 0;    // PairState: 4=LINKED 5=DEGRADED 6=LOST (siehe linkStateName)
+  int silenceMs = 0;    // ms seit letztem Signal vom Slave
+  int lossPct   = 0;    // Master->Slave Unicast-Verlustrate in %
+  StreamSubscription<List<int>>? _subLinkDiag;
   bool connected = false;
   // Zugangsschutz: true = Verbindung ist autorisiert (Steuerung freigeschaltet).
   bool authorized = false;
@@ -123,6 +130,19 @@ class EyeBle extends ChangeNotifier {
   /// true = Firmware verlangt Autorisierung, aber wir sind (noch) nicht
   /// autorisiert -> die App muss die Steuerung sperren (Zugangs-Gate zeigen).
   bool get locked => authSupported && !authorized;
+
+  /// Klartext des ESP-NOW-Verbindungszustands (PairState aus der Firmware).
+  String get linkStateName {
+    switch (linkState) {
+      case 4: return 'Verbunden';
+      case 5: return 'Instabil';
+      case 6: return 'Verloren';
+      case 3: return 'Koppeln...';
+      case 2: return 'Suche...';
+      case 1: return 'Reconnect...';
+      default: return 'Startet...';
+    }
+  }
 
   Future<void> _writeKey(BluetoothCharacteristic c, int key) async {
     final b = ByteData(4)..setUint32(0, key, Endian.little);
@@ -224,6 +244,7 @@ class EyeBle extends ChangeNotifier {
   Future<void> disconnect({bool forget = false}) async {
     await _subEyeId?.cancel();
     await _subSlaveLink?.cancel();
+    await _subLinkDiag?.cancel();
     await _subSlaveReceipt?.cancel();
     await _subAuthStatus?.cancel();
     await _subConn?.cancel();
@@ -249,6 +270,8 @@ class EyeBle extends ChangeNotifier {
     if (anim != null) animEnabled = anim;
     if (cnt != null)  eyeCount   = cnt;
     if (link != null) slaveLinked = link == 1;
+    final diag = await _readBytes(EyeUuids.chrLinkDiag);
+    if (diag != null && diag.length >= 4) _parseLinkDiag(diag);
     final rcp = await _readBytes(EyeUuids.chrSlaveReceipt);
     if (rcp != null && rcp.length >= 6) {
       _parseReceipt(rcp);
@@ -266,6 +289,12 @@ class EyeBle extends ChangeNotifier {
     slaveReRequestRound = v[5];
   }
 
+  void _parseLinkDiag(List<int> v) {
+    linkState = v[0];
+    silenceMs = v[1] | (v[2] << 8);
+    lossPct   = v[3];
+  }
+
   Future<void> _subscribeNotifies() async {
     final ce = _chars[EyeUuids.chrEyeId];
     if (ce != null) {
@@ -274,12 +303,20 @@ class EyeBle extends ChangeNotifier {
         if (v.isNotEmpty) { eyeId = v[0]; notifyListeners(); }
       });
     }
-    // Kabel-Status live mitverfolgen (Master notifyt 1x/s).
+    // Funk-Status live mitverfolgen (Master notifyt 1x/s).
     final cl = _chars[EyeUuids.chrSlaveLink];
     if (cl != null) {
       await cl.setNotifyValue(true);
       _subSlaveLink = cl.lastValueStream.listen((v) {
         if (v.isNotEmpty) { slaveLinked = v[0] == 1; notifyListeners(); }
+      });
+    }
+    // ESP-NOW-Verbindungsqualitaet live (state / silence / loss).
+    final cd = _chars[EyeUuids.chrLinkDiag];
+    if (cd != null) {
+      await cd.setNotifyValue(true);
+      _subLinkDiag = cd.lastValueStream.listen((v) {
+        if (v.length >= 4) { _parseLinkDiag(v); notifyListeners(); }
       });
     }
     final crcp = _chars[EyeUuids.chrSlaveReceipt];
