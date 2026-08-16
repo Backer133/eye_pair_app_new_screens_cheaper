@@ -22,9 +22,13 @@ class DiagnosticsScreen extends StatelessWidget {
               color: linked ? kGood : kWarn,
               title: 'Zweiter Screen (Slave)',
               value: ble.linkStateName,
-              sub: linked
-                  ? 'Slave ist per Funk verbunden und synchron'
-                  : 'Kein Funk-Kontakt - Slave stromlos oder ausser Reichweite',
+              // Ohne Kopplung ist "kein Funk-Kontakt" die falsche Erklaerung - es
+              // fehlt kein Signal, sondern schlicht der Partner.
+              sub: !ble.isBound
+                  ? 'Noch kein zweites Auge gekoppelt - unter Einstellungen koppeln'
+                  : linked
+                      ? 'Slave ist per Funk verbunden und synchron'
+                      : 'Kein Funk-Kontakt - Slave stromlos oder ausser Reichweite',
             ),
             const SectionHeader('Verbindungsqualitaet', icon: Icons.speed),
             _infoCard(
@@ -33,6 +37,18 @@ class DiagnosticsScreen extends StatelessWidget {
                     pillColor: _silenceColor(ble.silenceMs)),
                 _RowData(Icons.leak_remove, 'Verlustrate', '${ble.lossPct} %',
                     pillColor: _lossColor(ble.lossPct)),
+                _RowData(Icons.router, 'Kanal Master',
+                    ble.masterChannel == 0 ? '-' : 'Ch ${ble.masterChannel}'),
+                // Der Slave meldet seinen Kanal im Alive-Ping. Ohne Verbindung
+                // steht hier der letzte bekannte Wert - genau dann ist er nuetzlich.
+                _RowData(Icons.router_outlined,
+                    ble.slaveLinked ? 'Kanal Slave' : 'Kanal Slave (zuletzt)',
+                    ble.slaveChannel == 0 ? 'unbekannt' : 'Ch ${ble.slaveChannel}',
+                    pillColor: (ble.slaveChannel != 0 &&
+                                ble.masterChannel != 0 &&
+                                ble.slaveChannel != ble.masterChannel)
+                        ? kWarn
+                        : null),
               ],
             ),
             const SectionHeader('Zustand', icon: Icons.info_outline),
