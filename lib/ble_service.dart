@@ -22,6 +22,10 @@ class EyeUuids {
   static final Guid chrSetKey       = Guid("6E40000C-B5A3-F393-E0A9-E50E24DCCA9E");  // WRITE uint32: neuen Geraete-Key
   static final Guid chrAuthStatus   = Guid("6E40000D-B5A3-F393-E0A9-E50E24DCCA9E");  // READ/NOTIFY: 1=autorisiert
   static final Guid chrDeviceName   = Guid("6E40000E-B5A3-F393-E0A9-E50E24DCCA9E");  // READ/WRITE: Anzeigename
+  // Paar-Kopplung. 6E400010 ist bereits svcDiag -> kollisionsfreier Block ab 0012.
+  static final Guid chrPairCtrl     = Guid("6E400012-B5A3-F393-E0A9-E50E24DCCA9E");  // WRITE: Kommando (+MAC)
+  static final Guid chrPairFound    = Guid("6E400013-B5A3-F393-E0A9-E50E24DCCA9E");  // READ/NOTIFY: ein Fund
+  static final Guid chrPairState    = Guid("6E400014-B5A3-F393-E0A9-E50E24DCCA9E");  // READ/NOTIFY: Zustand
 
   static final Guid svcDiag      = Guid("6E400010-B5A3-F393-E0A9-E50E24DCCA9E");
   // Funk-Status: 1 = zweiter Screen (Slave) per ESP-NOW verbunden, 0 = nicht.
@@ -37,6 +41,24 @@ const int kCloudSlotCount    = 5;   // 5 Slots in LittleFS auf ESP
 // Referenzwert/Hinweis fuer den User - wird NICHT mehr automatisch gesendet: der Code
 // muss bei jedem Verbinden manuell eingegeben werden (auch dieser Default).
 const int kDefaultDeviceKey = 123456;
+
+// Der Admin-Code steht BEWUSST NICHT in der App: dieses Repo ist oeffentlich, und
+// ein veroeffentlichter Admin-Code waere der Generalschluessel fuer alle Augen.
+// Ob die aktuelle Sitzung Admin-Rechte hat, meldet die Firmware ueber
+// CHR_AUTH_STATUS (0 = gesperrt, 1 = Geraete-Code, 2 = Admin).
+
+/// Ein vom Master gefundener koppelbarer Slave (aus CHR_PAIR_FOUND).
+class FoundSlave {
+  final List<int> mac;     // 6 Bytes
+  final int rssi;          // dBm, negativ
+  final bool alreadyBound; // true = gehoert schon zu einem anderen Master
+  const FoundSlave(this.mac, this.rssi, this.alreadyBound);
+
+  String get macStr =>
+      mac.map((b) => b.toRadixString(16).padLeft(2, '0').toUpperCase()).join(':');
+  /// Letzte zwei Bytes, z.B. "FD:D8" - kurz genug fuer die Liste.
+  String get shortId => macStr.substring(12);
+}
 
 // Asset-Namen zu Eye-Index. MUSS in der Reihenfolge identisch zu EYE_IMAGES[]
 // im Master.ino + Slave.ino sein! Nur hardcoded Augen (Index 0..3).
@@ -87,6 +109,32 @@ class EyeBle extends ChangeNotifier {
   int slaveTotalChunks      = 0;
   int slaveReRequestRound   = 0;
   StreamSubscription<List<int>>? _subSlaveReceipt;
+  // --- Paar-Kopplung ---
+  final List<FoundSlave> pairingFound = [];
+  int pairingState = 0;   // 0 idle, 1 scannend, 2 bindend, 3 entkoppelnd, 4 Fehler
+  int pairingError = 0;   // siehe pairingErrorText
+  List<int> boundMac = const [0, 0, 0, 0, 0, 0];
+  int boundPairId = 0;
+  /// true, wenn in dieser Sitzung mit dem Admin-Code autorisiert wurde.
+  bool isAdmin = false;
+  StreamSubscription<List<int>>? _subPairFound;
+  StreamSubscription<List<int>>? _subPairState;
+
+  bool get isBound => boundMac.any((b) => b != 0);
+
+  String get boundMacStr =>
+      boundMac.map((b) => b.toRadixString(16).padLeft(2, '0').toUpperCase()).join(':');
+
+  String get pairingErrorText {
+    switch (pairingError) {
+      case 1: return 'Der Slave hat die Kopplung nicht bestaetigt';
+      case 2: return 'Der Slave gehoert schon zu einem anderen Master';
+      case 3: return 'Dafuer wird der Admin-Code gebraucht';
+      case 4: return 'Slave nicht gefunden';
+      default: return '';
+    }
+  }
+
   // Slot-Bitmap (Bit n = Slot n hat ein Bild auf dem Master in LittleFS).
   // Wird nur EINMAL beim Connect aus CHR_SLOT_STATUS gelesen (kein Notify mehr -
   // das hat den ESP-NOW-Forward gestoert). Reicht fuer "belegt"-Anzeige nach
@@ -144,6 +192,13 @@ class EyeBle extends ChangeNotifier {
     }
   }
 
+  /// CHR_AUTH_STATUS liefert das Auth-Level: 0 = gesperrt, 1 = Geraete-Code,
+  /// 2 = Admin-Code. Aeltere Firmware kennt nur 0/1 - deshalb ">= 1" statt "== 1".
+  void _parseAuthLevel(int level) {
+    authorized = level >= 1;
+    isAdmin    = level >= 2;
+  }
+
   Future<void> _writeKey(BluetoothCharacteristic c, int key) async {
     final b = ByteData(4)..setUint32(0, key, Endian.little);
     await c.write(b.buffer.asUint8List(), withoutResponse: false);
@@ -170,10 +225,10 @@ class EyeBle extends ChangeNotifier {
       try {
         await cs.setNotifyValue(true);
         _subAuthStatus = cs.lastValueStream.listen((v) {
-          if (v.isNotEmpty) { authorized = v[0] == 1; notifyListeners(); }
+          if (v.isNotEmpty) { _parseAuthLevel(v[0]); notifyListeners(); }
         });
         final init = await cs.read();
-        if (init.isNotEmpty) authorized = init[0] == 1;
+        if (init.isNotEmpty) _parseAuthLevel(init[0]);
       } catch (_) {}
     }
     if (_sessionKey != null) {
@@ -200,6 +255,8 @@ class EyeBle extends ChangeNotifier {
     }
     if (authorized) {
       _sessionKey = key;   // korrekter Code -> nur fuer diese Sitzung merken (RAM)
+      // isAdmin wurde bereits aus CHR_AUTH_STATUS gesetzt (_parseAuthLevel) -
+      // die App muss den Admin-Code dafuer nicht kennen.
       return true;
     }
     authAttempts++;        // falscher Code -> UI-Feedback
@@ -247,6 +304,8 @@ class EyeBle extends ChangeNotifier {
     await _subLinkDiag?.cancel();
     await _subSlaveReceipt?.cancel();
     await _subAuthStatus?.cancel();
+    await _subPairFound?.cancel();
+    await _subPairState?.cancel();
     await _subConn?.cancel();
     _chars.clear();
     try { await device?.disconnect(); } catch (_) {}
@@ -254,6 +313,10 @@ class EyeBle extends ChangeNotifier {
     authorized = false;
     authSupported = false;
     slaveLinked = false;
+    pairingFound.clear();
+    pairingState = 0;
+    pairingError = 0;
+    isAdmin = false;
     if (forget) _sessionKey = null;
     notifyListeners();
   }
@@ -328,7 +391,74 @@ class EyeBle extends ChangeNotifier {
     }
     // chrSlotStatus wird nur EINMAL via _readAll gelesen - kein Notify-Subscribe,
     // weil das beim ESP zu BLE-Coex-Druck waehrend Forward gefuehrt hat.
+
+    // --- Kopplung: ein Fund pro Notify (8 Bytes), Zustand als 9-Byte-Block ---
+    final cpf = _chars[EyeUuids.chrPairFound];
+    if (cpf != null) {
+      await cpf.setNotifyValue(true);
+      _subPairFound = cpf.lastValueStream.listen((v) {
+        if (v.length < 8) return;
+        final mac = v.sublist(0, 6);
+        if (pairingFound.any((f) => _macEq(f.mac, mac))) return;
+        final rssi = v[6] > 127 ? v[6] - 256 : v[6];   // int8
+        pairingFound.add(FoundSlave(mac, rssi, (v[7] & 0x01) != 0));
+        notifyListeners();
+      });
+    }
+    final cps = _chars[EyeUuids.chrPairState];
+    if (cps != null) {
+      await cps.setNotifyValue(true);
+      _subPairState = cps.lastValueStream.listen((v) {
+        if (v.length < 9) return;
+        _parsePairState(v);
+        notifyListeners();
+      });
+      try {
+        final init = await cps.read();
+        if (init.length >= 9) _parsePairState(init);
+      } catch (_) {}
+    }
   }
+
+  void _parsePairState(List<int> v) {
+    pairingState = v[0];
+    boundPairId  = v[1];
+    pairingError = v[2];
+    boundMac     = v.sublist(3, 9);
+  }
+
+  bool _macEq(List<int> a, List<int> b) {
+    if (a.length != b.length) return false;
+    for (int i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+
+  // ===== Kopplung =====
+
+  Future<void> _pairCmd(int cmd, [List<int>? mac]) async {
+    final c = _chars[EyeUuids.chrPairCtrl];
+    if (c == null || locked) return;
+    await c.write(<int>[cmd, ...?mac], withoutResponse: false);
+  }
+
+  /// Startet die Suche nach koppelbaren Slaves. Der Master wechselt dafuer auf
+  /// Kanal 6 und funkt 60 s lang; danach laeuft der Modus von selbst aus.
+  Future<void> startPairingScan() async {
+    pairingFound.clear();
+    pairingError = 0;
+    notifyListeners();
+    await _pairCmd(0x01);
+  }
+
+  Future<void> stopPairingScan()            => _pairCmd(0x02);
+  /// Laesst das Auge 5 s blinken - so erkennt der Nutzer, welcher Slave gemeint ist.
+  Future<void> identifySlave(List<int> mac) => _pairCmd(0x03, mac);
+  Future<void> bindSlave(List<int> mac)     => _pairCmd(0x04, mac);
+  Future<void> unbindOwn()                  => _pairCmd(0x05);
+  /// Nur mit Admin-Code: loest die Bindung eines fremden Slaves (defekter Master).
+  Future<void> unbindAdmin(List<int> mac)   => _pairCmd(0x06, mac);
 
   Future<int?> _readByte(Guid uuid) async {
     final c = _chars[uuid];
