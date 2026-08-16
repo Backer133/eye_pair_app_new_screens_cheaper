@@ -40,7 +40,9 @@ class EyeUuids {
 }
 
 const int kHardcodedEyeCount = 4;   // A7, A10, A12, A13 (in dieser Reihenfolge!)
-const int kCloudSlotCount    = 5;   // 5 Slots in LittleFS auf ESP
+// 4 statt 5: Bei 320x320 belegt ein Cloud-Auge 204800 Byte, das LittleFS auf dem
+// ESP hat 917504 - fuenf Slots passen nicht mehr, vier schon.
+const int kCloudSlotCount    = 4;
 
 // Werks-Standard-Zugangscode (muss zu DEFAULT_DEVICE_KEY in der Firmware passen).
 // Referenzwert/Hinweis fuer den User - wird NICHT mehr automatisch gesendet: der Code

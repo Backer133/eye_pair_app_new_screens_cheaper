@@ -1,28 +1,50 @@
-// PNG -> 280x280 RGB565 Konvertierung fuer Cloud-Eye-Upload via BLE.
+// PNG -> 320x320 RGB565 Konvertierung fuer Cloud-Eye-Upload via BLE.
 // Zielgeraet: ESP32-S3-LCD-1.28 (GC9A01, 240x240-Display). Die Bilder sind bewusst
-// oversized (280, OLED-Prinzip): zentriert ragen sie ueber den Displayrand, damit bei
-// der Gaze-Bewegung kein weisser Rand entsteht - 1:1 wie die eingebauten Default-Augen.
+// oversized (320 auf 240, OLED-Prinzip): zentriert ragen sie ueber den Displayrand,
+// damit weder Ausrichtung noch Blickbewegung einen leeren Rand erzeugen - 1:1 wie
+// die eingebauten Default-Augen. Der Ueberschuss muss halbe sichtbare Hoehe PLUS
+// vertikalen Ausschlag abdecken; bei 280 reichte er dafuer nicht.
 // Byte-Reihenfolge: big-endian (high-byte zuerst) - passt zu den Default-Augen
 // (LV_COLOR_16_SWAP=1) und zum Firmware-Flush mit swap=false.
 
 import 'dart:typed_data';
 import 'package:image/image.dart' as img;
 
-const int kEyeWidth  = 280;
-const int kEyeHeight = 280;
-const int kRgb565ByteCount = kEyeWidth * kEyeHeight * 2;  // 156800 Bytes
+const int kEyeWidth  = 320;
+const int kEyeHeight = 320;
+const int kRgb565ByteCount = kEyeWidth * kEyeHeight * 2;  // 204800 Bytes
 
-/// Decodiert PNG/JPG, resized auf 240x240, konvertiert zu RGB565 LE.
-/// Bild wird unveraendert uebertragen - keine Hintergrund-Konvertierung.
-/// Tipp: PNG bitte direkt mit weissem Hintergrund hochladen (Display ist weiss).
+/// So gross wird das Auge selbst gezeichnet. Der Rest der 320er-Leinwand ist
+/// fortgesetzter Rand. Wuerde man stattdessen auf volle 320 skalieren, waeren
+/// Cloud-Augen 14 % groesser als die eingebauten - und die einmal gemachte
+/// Ausrichtung wuerde je nach gewaehltem Auge nicht mehr passen.
+const int kEyeContent = 280;
+
+/// Decodiert PNG/JPG, skaliert das Auge auf 280x280 und legt es mittig auf eine
+/// 320x320-Leinwand, deren Rand aus den Randpixeln fortgesetzt wird. Ergebnis als
+/// RGB565, big-endian.
 Uint8List pngToRgb565(Uint8List pngBytes) {
   final src = img.decodeImage(pngBytes);
   if (src == null) {
     throw Exception('PNG/JPG konnte nicht dekodiert werden');
   }
-  final resized = (src.width != kEyeWidth || src.height != kEyeHeight)
-      ? img.copyResize(src, width: kEyeWidth, height: kEyeHeight, interpolation: img.Interpolation.linear)
+  final content = (src.width != kEyeContent || src.height != kEyeContent)
+      ? img.copyResize(src, width: kEyeContent, height: kEyeContent,
+                       interpolation: img.Interpolation.linear)
       : src;
+
+  // Leinwand mit fortgesetztem Rand: jedes Pixel ausserhalb des Inhalts uebernimmt
+  // den naechstgelegenen Inhaltsrand (Clamp). Bei den Augen ist das die gleichmaessige
+  // helle Sklera, der Uebergang faellt deshalb nicht auf.
+  final pad = (kEyeWidth - kEyeContent) ~/ 2;
+  final resized = img.Image(width: kEyeWidth, height: kEyeHeight);
+  for (int y = 0; y < kEyeHeight; y++) {
+    final sy = (y - pad).clamp(0, kEyeContent - 1);
+    for (int x = 0; x < kEyeWidth; x++) {
+      final sx = (x - pad).clamp(0, kEyeContent - 1);
+      resized.setPixel(x, y, content.getPixel(sx, sy));
+    }
+  }
 
   final out = Uint8List(kRgb565ByteCount);
   int o = 0;
