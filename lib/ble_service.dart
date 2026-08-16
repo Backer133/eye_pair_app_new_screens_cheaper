@@ -482,7 +482,21 @@ class EyeBle extends ChangeNotifier {
     eyeId = id; notifyListeners();
   }
 
-  // setBrightness entfernt - Funktioniert auf ESP32-C3 mit Arduino Core 2.x nicht zuverlaessig.
+  /// Setzt die Display-Helligkeit beider Augen (0..255). Der Master stellt sein
+  /// eigenes Backlight und schiebt den Wert per ConfigMsg an den Slave weiter.
+  ///
+  /// War frueher ausgebaut mit der Begruendung, es funktioniere auf dem ESP32
+  /// nicht zuverlaessig. Die eigentliche Ursache lag in der Firmware: ledcAttach()
+  /// lief vor tft.begin(), und TFT_eSPI::init() reisst den Backlight-Pin danach
+  /// als normalen GPIO an sich - die PWM war damit wirkungslos. Seit die
+  /// Zuordnung nach tft.begin() passiert, geht es.
+  Future<void> setBrightness(int value) async {
+    if (locked) return;
+    final v = value.clamp(0, 255);
+    final c = _chars[EyeUuids.chrBrightness]; if (c == null) return;
+    await c.write([v], withoutResponse: false);
+    brightness = v; notifyListeners();
+  }
 
   Future<void> setAnimEnabled(bool en) async {
     if (locked) return;

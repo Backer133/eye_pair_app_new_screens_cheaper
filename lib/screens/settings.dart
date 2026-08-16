@@ -16,6 +16,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // App-Version (aus dem Paket -> folgt automatisch der pubspec-Version).
   String _version = '';
 
+  // Waehrend des Slider-Ziehens: lokaler Vorschauwert, bis losgelassen wird.
+  int? _brightnessPreview;
+  int _brightness(EyeBle ble) => _brightnessPreview ?? ble.brightness;
+
   @override
   void initState() {
     super.initState();
@@ -144,6 +148,47 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 value: animOn,
                 activeColor: kAccent,
                 onChanged: (v) => ble.setAnimEnabled(v),
+              ),
+            ),
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        _iconBox(Icons.brightness_6_outlined, kAccentGlow),
+                        const SizedBox(width: 12),
+                        const Expanded(
+                          child: Text('Helligkeit',
+                              style: TextStyle(fontWeight: FontWeight.w700)),
+                        ),
+                        Text('${(_brightness(ble) * 100 / 255).round()} %',
+                            style: const TextStyle(color: Colors.white70)),
+                      ],
+                    ),
+                    Slider(
+                      // Untergrenze 10 statt 0: bei 0 waere das Display komplett
+                      // dunkel und der Regler kaum wiederzufinden.
+                      min: 10, max: 255,
+                      value: _brightness(ble).toDouble().clamp(10, 255),
+                      activeColor: kAccent,
+                      // Waehrend des Ziehens nur lokal anzeigen; gesendet wird beim
+                      // Loslassen. Jeder Write schreibt am Master NVS und schickt
+                      // eine ConfigMsg an den Slave - das soll nicht pro Pixel passieren.
+                      onChanged: ble.locked
+                          ? null
+                          : (v) => setState(() => _brightnessPreview = v.round()),
+                      onChangeEnd: (v) {
+                        _brightnessPreview = null;
+                        ble.setBrightness(v.round());
+                      },
+                    ),
+                    const Text('Gilt fuer beide Augen',
+                        style: TextStyle(fontSize: 12, color: Colors.white38)),
+                  ],
+                ),
               ),
             ),
 
