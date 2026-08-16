@@ -18,8 +18,13 @@ class DiagnosticsScreen extends StatelessWidget {
           children: [
             const SectionHeader('Funk-Verbindung (ESP-NOW)', icon: Icons.wifi),
             _bigCard(
-              icon: linked ? Icons.wifi : Icons.wifi_off,
-              color: linked ? kGood : kWarn,
+              // Symbol und Farbe muessen aus derselben Quelle kommen wie der Text.
+              // Vorher hing die Farbe an slaveLinked, der Text an isBound - dabei
+              // konnte "nicht gekoppelt" in Gruen erscheinen.
+              icon: !ble.isBound
+                  ? Icons.link_off
+                  : linked ? Icons.wifi : Icons.wifi_off,
+              color: !ble.isBound ? kWarn : (linked ? kGood : kWarn),
               title: 'Zweiter Screen (Slave)',
               value: ble.linkStateName,
               // Ohne Kopplung ist "kein Funk-Kontakt" die falsche Erklaerung - es
