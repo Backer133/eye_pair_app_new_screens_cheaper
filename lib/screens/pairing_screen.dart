@@ -37,8 +37,12 @@ class _PairingScreenState extends State<PairingScreen> {
 
   /// Antippen laesst das Auge blinken; erst nach Bestaetigung wird gebunden.
   Future<void> _tapSlave(FoundSlave f) async {
+    if (f.boundToThisMaster) {
+      _snack('Dieses Auge ist bereits mit diesem Master gekoppelt.');
+      return;
+    }
     if (f.alreadyBound) {
-      _snack('Dieses Auge gehoert schon zu einem anderen Master.');
+      _snack('Dieses Auge gehoert zu einem anderen Master.');
       return;
     }
     await widget.ble.identifySlave(f.mac);
@@ -185,48 +189,91 @@ class _PairingScreenState extends State<PairingScreen> {
                 ),
               const SizedBox(height: 8),
               Expanded(
-                child: ble.pairingFound.isEmpty
-                    ? const Center(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            CircularProgressIndicator(),
-                            SizedBox(height: 16),
-                            Text('Suche nach koppelbaren Augen ...'),
-                            SizedBox(height: 4),
-                            Text('Der Slave muss eingeschaltet sein.',
-                                style: TextStyle(fontSize: 12)),
-                          ],
-                        ),
-                      )
-                    : ListView.builder(
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        itemCount: ble.pairingFound.length,
-                        itemBuilder: (ctx, i) {
-                          final f = ble.pairingFound[i];
-                          final canAdmin = f.alreadyBound && ble.isAdmin;
-                          return Card(
-                            child: ListTile(
-                              enabled: !f.alreadyBound || ble.isAdmin,
-                              leading: Icon(
-                                f.alreadyBound ? Icons.lock : Icons.visibility,
-                                color: f.alreadyBound ? kWarn : kAccentGlow,
-                              ),
-                              title: Text('Auge ${f.shortId}'),
-                              subtitle: Text(f.alreadyBound
-                                  ? 'gehoert schon zu einem anderen Master'
-                                  : '${f.rssi} dBm - antippen zum Blinken'),
-                              trailing: canAdmin
-                                  ? TextButton(
-                                      onPressed: () => _forceUnbind(f),
-                                      child: const Text('Zwangsloesen'),
-                                    )
-                                  : null,
-                              onTap: () => _tapSlave(f),
+                child: Builder(builder: (ctx) {
+                  // Augen, die einem ANDEREN Master gehoeren, sind hier nur
+                  // Rauschen - sie lassen sich ohnehin nicht koppeln. Sichtbar
+                  // bleiben sie nur fuer Admins, die sie zwangsloesen duerfen.
+                  final visible = ble.pairingFound
+                      .where((f) => !f.boundToOther || ble.isAdmin)
+                      .toList();
+                  final hidden = ble.pairingFound.length - visible.length;
+
+                  if (visible.isEmpty) {
+                    return Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const CircularProgressIndicator(),
+                          const SizedBox(height: 16),
+                          const Text('Suche nach koppelbaren Augen ...'),
+                          const SizedBox(height: 4),
+                          const Text('Der Slave muss eingeschaltet sein.',
+                              style: TextStyle(fontSize: 12)),
+                          if (hidden > 0) ...[
+                            const SizedBox(height: 16),
+                            Text(
+                              '$hidden Auge(n) in Reichweite gehoeren zu anderen '
+                              'Mastern und werden ausgeblendet.',
+                              textAlign: TextAlign.center,
+                              style: const TextStyle(
+                                  fontSize: 12, color: Colors.white38),
                             ),
-                          );
-                        },
+                          ],
+                        ],
                       ),
+                    );
+                  }
+
+                  return ListView.builder(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    itemCount: visible.length + (hidden > 0 ? 1 : 0),
+                    itemBuilder: (ctx, i) {
+                      if (i == visible.length) {
+                        return Padding(
+                          padding: const EdgeInsets.fromLTRB(8, 12, 8, 4),
+                          child: Text(
+                            '$hidden weiteres Auge / weitere Augen in Reichweite '
+                            'gehoeren zu anderen Mastern und sind ausgeblendet.',
+                            style: const TextStyle(
+                                fontSize: 12, color: Colors.white38),
+                          ),
+                        );
+                      }
+                      final f = visible[i];
+                      final canAdmin = f.boundToOther && ble.isAdmin;
+                      return Card(
+                        child: ListTile(
+                          enabled: f.free || canAdmin,
+                          leading: Icon(
+                            f.boundToThisMaster
+                                ? Icons.link
+                                : f.alreadyBound
+                                    ? Icons.lock
+                                    : Icons.visibility,
+                            color: f.boundToThisMaster
+                                ? kGood
+                                : f.alreadyBound
+                                    ? kWarn
+                                    : kAccentGlow,
+                          ),
+                          title: Text('Auge ${f.shortId}'),
+                          subtitle: Text(f.boundToThisMaster
+                              ? 'gehoert zu diesem Master'
+                              : f.alreadyBound
+                                  ? 'gehoert zu einem anderen Master'
+                                  : '${f.rssi} dBm - antippen zum Blinken'),
+                          trailing: canAdmin
+                              ? TextButton(
+                                  onPressed: () => _forceUnbind(f),
+                                  child: const Text('Zwangsloesen'),
+                                )
+                              : null,
+                          onTap: () => _tapSlave(f),
+                        ),
+                      );
+                    },
+                  );
+                }),
               ),
             ],
           ),
