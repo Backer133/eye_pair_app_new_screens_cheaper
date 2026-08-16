@@ -26,6 +26,9 @@ class EyeUuids {
   static final Guid chrPairCtrl     = Guid("6E400012-B5A3-F393-E0A9-E50E24DCCA9E");  // WRITE: Kommando (+MAC)
   static final Guid chrPairFound    = Guid("6E400013-B5A3-F393-E0A9-E50E24DCCA9E");  // READ/NOTIFY: ein Fund
   static final Guid chrPairState    = Guid("6E400014-B5A3-F393-E0A9-E50E24DCCA9E");  // READ/NOTIFY: Zustand
+  // Augen-Ausrichtung auf die Maske (je Auge) und Bewegung (fuers Paar)
+  static final Guid chrEyeGeom      = Guid("6E400015-B5A3-F393-E0A9-E50E24DCCA9E");  // READ/WRITE
+  static final Guid chrAnimCfg      = Guid("6E400018-B5A3-F393-E0A9-E50E24DCCA9E");  // READ/WRITE/NOTIFY
 
   static final Guid svcDiag      = Guid("6E400010-B5A3-F393-E0A9-E50E24DCCA9E");
   // Funk-Status: 1 = zweiter Screen (Slave) per ESP-NOW verbunden, 0 = nicht.
@@ -46,6 +49,80 @@ const int kDefaultDeviceKey = 123456;
 // ein veroeffentlichter Admin-Code waere der Generalschluessel fuer alle Augen.
 // Ob die aktuelle Sitzung Admin-Rechte hat, meldet die Firmware ueber
 // CHR_AUTH_STATUS (0 = gesperrt, 1 = Geraete-Code, 2 = Admin).
+
+/// Bewegungs-Konfiguration des Paares. Spiegelt `struct AnimCfg` aus Pairing.h -
+/// 17 Byte, little-endian, gepackt. Gilt fuer BEIDE Augen: sie muessen identisch
+/// rechnen, sonst blinzeln sie nicht mehr gleichzeitig.
+///
+/// Werkswerte und Voreinstellungen stehen bewusst NICHT hier, sondern nur in der
+/// Firmware - sonst muessten dieselben Zahlenreihen doppelt gepflegt werden. Die App
+/// bittet um "Voreinstellung 1" und liest das Ergebnis zurueck.
+class AnimCfg {
+  final int holdMs, moveMs;
+  final int posCount, ampX, ampY, arc, ease;
+  final int blinkWindowMs, blinkCloseMs, blinkHoldMs, blinkOpenMs;
+
+  const AnimCfg({
+    required this.holdMs, required this.moveMs,
+    required this.posCount, required this.ampX, required this.ampY,
+    required this.arc, required this.ease,
+    required this.blinkWindowMs, required this.blinkCloseMs,
+    required this.blinkHoldMs, required this.blinkOpenMs,
+  });
+
+  static const int byteLength = 17;
+
+  factory AnimCfg.fromBytes(List<int> v) {
+    final b = ByteData.sublistView(Uint8List.fromList(v));
+    return AnimCfg(
+      holdMs:        b.getUint16(0, Endian.little),
+      moveMs:        b.getUint16(2, Endian.little),
+      posCount:      b.getUint8(4),
+      ampX:          b.getUint8(5),
+      ampY:          b.getUint8(6),
+      arc:           b.getUint8(7),
+      ease:          b.getUint8(8),
+      blinkWindowMs: b.getUint16(9,  Endian.little),
+      blinkCloseMs:  b.getUint16(11, Endian.little),
+      blinkHoldMs:   b.getUint16(13, Endian.little),
+      blinkOpenMs:   b.getUint16(15, Endian.little),
+    );
+  }
+
+  Uint8List toBytes() {
+    final b = ByteData(byteLength);
+    b.setUint16(0, holdMs, Endian.little);
+    b.setUint16(2, moveMs, Endian.little);
+    b.setUint8(4, posCount);
+    b.setUint8(5, ampX);
+    b.setUint8(6, ampY);
+    b.setUint8(7, arc);
+    b.setUint8(8, ease);
+    b.setUint16(9,  blinkWindowMs, Endian.little);
+    b.setUint16(11, blinkCloseMs,  Endian.little);
+    b.setUint16(13, blinkHoldMs,   Endian.little);
+    b.setUint16(15, blinkOpenMs,   Endian.little);
+    return b.buffer.asUint8List();
+  }
+
+  AnimCfg copyWith({
+    int? holdMs, int? moveMs, int? posCount, int? ampX, int? ampY,
+    int? arc, int? ease, int? blinkWindowMs, int? blinkCloseMs,
+    int? blinkHoldMs, int? blinkOpenMs,
+  }) => AnimCfg(
+        holdMs: holdMs ?? this.holdMs,
+        moveMs: moveMs ?? this.moveMs,
+        posCount: posCount ?? this.posCount,
+        ampX: ampX ?? this.ampX,
+        ampY: ampY ?? this.ampY,
+        arc: arc ?? this.arc,
+        ease: ease ?? this.ease,
+        blinkWindowMs: blinkWindowMs ?? this.blinkWindowMs,
+        blinkCloseMs: blinkCloseMs ?? this.blinkCloseMs,
+        blinkHoldMs: blinkHoldMs ?? this.blinkHoldMs,
+        blinkOpenMs: blinkOpenMs ?? this.blinkOpenMs,
+      );
+}
 
 /// Ein vom Master gefundener koppelbarer Slave (aus CHR_PAIR_FOUND).
 class FoundSlave {
@@ -150,6 +227,16 @@ class EyeBle extends ChangeNotifier {
       default: return '';
     }
   }
+
+  // --- Augen-Ausrichtung auf die Maske (je Auge) ---
+  // Index 0 = Master, 1 = Slave. Handgeschnitzte Oeffnungen weichen voneinander ab,
+  // deshalb hat jedes Auge eigene Werte.
+  List<int> eyeYOff = [0, 0];
+  List<int> eyeVisH = [240, 240];
+
+  // --- Bewegung (fuers Paar) ---
+  AnimCfg? animCfg;                 // null = noch nicht gelesen
+  StreamSubscription<List<int>>? _subAnimCfg;
 
   // Slot-Bitmap (Bit n = Slot n hat ein Bild auf dem Master in LittleFS).
   // Wird nur EINMAL beim Connect aus CHR_SLOT_STATUS gelesen (kein Notify mehr -
@@ -339,6 +426,7 @@ class EyeBle extends ChangeNotifier {
     await _subAuthStatus?.cancel();
     await _subPairFound?.cancel();
     await _subPairState?.cancel();
+    await _subAnimCfg?.cancel();
     await _subConn?.cancel();
     _chars.clear();
     try { await device?.disconnect(); } catch (_) {}
@@ -458,7 +546,75 @@ class EyeBle extends ChangeNotifier {
         if (init.length >= 9) _parsePairState(init);
       } catch (_) {}
     }
+
+    // --- Ausrichtung: einmal lesen, damit die Regler richtig starten ---
+    final cg = _chars[EyeUuids.chrEyeGeom];
+    if (cg != null) {
+      try {
+        final v = await cg.read();
+        if (v.length >= 4) {
+          eyeYOff = [_s8(v[0]), _s8(v[2])];
+          eyeVisH = [v[1], v[3]];
+        }
+      } catch (_) {}
+    }
+
+    // --- Bewegung: lesen + abonnieren. Die Firmware meldet nach Voreinstellung,
+    //     Werkseinstellung und jeder Klemmung den tatsaechlichen Stand zurueck. ---
+    final ca = _chars[EyeUuids.chrAnimCfg];
+    if (ca != null) {
+      await ca.setNotifyValue(true);
+      _subAnimCfg = ca.lastValueStream.listen((v) {
+        if (v.length < AnimCfg.byteLength) return;
+        animCfg = AnimCfg.fromBytes(v);
+        notifyListeners();
+      });
+      try {
+        final v = await ca.read();
+        if (v.length >= AnimCfg.byteLength) animCfg = AnimCfg.fromBytes(v);
+      } catch (_) {}
+    }
   }
+
+  /// Byte als vorzeichenbehaftet lesen - y_off kann negativ sein.
+  int _s8(int b) => b > 127 ? b - 256 : b;
+
+  // ===== Augen-Ausrichtung und Bewegung =====
+
+  /// Setzt die Ausrichtung eines Auges. [target] 0 = Master, 1 = Slave.
+  /// [persist] false = nur Vorschau (waehrend des Regler-Ziehens, kein Flash-Schreiben),
+  /// true = uebernehmen und speichern.
+  Future<void> setEyeGeom(int target, int yOff, int visH, {bool persist = false}) async {
+    final c = _chars[EyeUuids.chrEyeGeom];
+    if (c == null || locked) return;
+    eyeYOff[target] = yOff;
+    eyeVisH[target] = visH;
+    notifyListeners();
+    await c.write([target, yOff & 0xFF, visH & 0xFF, persist ? 1 : 0],
+        withoutResponse: false);
+  }
+
+  Future<void> _animCmd(int cmd, int arg, [Uint8List? payload]) async {
+    final c = _chars[EyeUuids.chrAnimCfg];
+    if (c == null || locked) return;
+    await c.write(<int>[cmd, arg, ...?payload], withoutResponse: false);
+  }
+
+  Future<void> setAnimCfg(AnimCfg cfg, {bool persist = false}) async {
+    animCfg = cfg;
+    notifyListeners();
+    await _animCmd(persist ? 1 : 0, 0, cfg.toBytes());
+  }
+
+  /// Voreinstellung anwenden (0 ruhig, 1 normal, 2 lebhaft). Die Werte kommen aus
+  /// der Firmware und werden anschliessend per Notify zurueckgemeldet.
+  Future<void> applyAnimPreset(int index) => _animCmd(3, index);
+
+  /// Zurueck auf die Werkseinstellung der Firmware.
+  Future<void> resetAnimCfg() => _animCmd(2, 0);
+
+  /// Hilfslinien an den Kanten des sichtbaren Bandes ein-/ausblenden - auf beiden Augen.
+  Future<void> setEyeGuides(bool on) => _animCmd(4, on ? 1 : 0);
 
   void _parsePairState(List<int> v) {
     pairingState = v[0];

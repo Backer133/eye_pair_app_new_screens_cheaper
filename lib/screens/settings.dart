@@ -4,6 +4,8 @@ import 'package:package_info_plus/package_info_plus.dart';
 import '../ble_service.dart';
 import '../theme.dart';
 import 'pairing_screen.dart';
+import 'eye_align_screen.dart';
+import 'motion_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   final EyeBle ble;
@@ -189,6 +191,40 @@ class _SettingsScreenState extends State<SettingsScreen> {
                         style: TextStyle(fontSize: 12, color: Colors.white38)),
                   ],
                 ),
+              ),
+            ),
+
+            // ---- Einbau & Bewegung ----
+            const SectionHeader('Einbau & Bewegung', icon: Icons.animation),
+            Card(
+              child: Column(
+                children: [
+                  ListTile(
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                    leading: _iconBox(Icons.crop_free, kAccentGlow),
+                    title: const Text('Augen ausrichten',
+                        style: TextStyle(fontWeight: FontWeight.w700)),
+                    subtitle: const Text('Je Auge auf seine Maskenoeffnung einstellen'),
+                    trailing: const Icon(Icons.chevron_right, color: Colors.white38),
+                    enabled: !ble.locked,
+                    onTap: ble.locked ? null : () => Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => EyeAlignScreen(ble: ble)),
+                    ),
+                  ),
+                  const Divider(height: 1),
+                  ListTile(
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                    leading: _iconBox(Icons.animation, kAccentGlow),
+                    title: const Text('Bewegung & Blinzeln',
+                        style: TextStyle(fontWeight: FontWeight.w700)),
+                    subtitle: const Text('Gilt fuer beide Augen gemeinsam'),
+                    trailing: const Icon(Icons.chevron_right, color: Colors.white38),
+                    enabled: !ble.locked,
+                    onTap: ble.locked ? null : () => Navigator.of(context).push(
+                      MaterialPageRoute(builder: (_) => MotionScreen(ble: ble)),
+                    ),
+                  ),
+                ],
               ),
             ),
 
