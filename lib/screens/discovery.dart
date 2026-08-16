@@ -123,9 +123,29 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
       if (!mounted) return;
       setState(() {
         _connectingId = null;
-        _error = "Verbindungs-Fehler: $e";
+        _error = "Verbindungs-Fehler: $e\n${_hintFor(e)}";
       });
     }
+  }
+
+  /// Uebersetzt die kryptischen GATT-Fehler in eine Handlungsanweisung.
+  ///
+  /// Der haeufigste Fall nach einem Firmware-Update: Android merkt sich fuer ein
+  /// gebondetes Geraet die entdeckten Services samt Handle-Nummern. Kommen in der
+  /// Firmware Characteristics dazu, verschieben sich die Handles - das Handy schreibt
+  /// dann auf veraltete Adressen und faengt sich GATT_WRITE_NOT_PERMITTED ein. Die
+  /// Firmware kann daran nichts aendern; das Handy muss die Kopplung vergessen.
+  String _hintFor(Object e) {
+    final s = e.toString();
+    if (s.contains('WRITE_NOT_PERMITTED') ||
+        s.contains('INSUFFICIENT_AUTH') ||
+        s.contains('setNotifyValue')) {
+      return '\nWahrscheinliche Ursache: Das Handy hat eine veraltete Geraete-'
+             'Struktur gespeichert (nach einem Firmware-Update). Abhilfe: In den '
+             'Bluetooth-Einstellungen des Handys das Augenpaar "entkoppeln" bzw. '
+             '"Geraet vergessen", dann hier neu verbinden.';
+    }
+    return '';
   }
 
   @override
