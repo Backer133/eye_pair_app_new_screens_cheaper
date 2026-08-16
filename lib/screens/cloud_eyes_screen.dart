@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import '../ble_service.dart';
 import '../cloud_eyes.dart';
 import '../image_pipeline.dart';
 import '../slot_metadata.dart';
+import '../theme.dart';
 
 class CloudEyesScreen extends StatefulWidget {
   final EyeBle ble;
@@ -212,6 +215,16 @@ class _CloudEyesScreenState extends State<CloudEyesScreen> {
 /// - Startet bei Dialog-Open einen Reconnect-Timer (15s)
 /// - Nach Reconnect liest er CHR_SLAVE_RECEIPT, zeigt unique/total
 /// - Bei Re-Request: wartet weiter, liest erneut
+
+/// Zeigt den zweiten Teil der Übertragung: Master gibt das Bild per Funk an den
+/// Slave weiter.
+///
+/// Die App **muss** dafür getrennt sein — BLE und WLAN teilen sich beim ESP32 die
+/// Antenne, eine offene BLE-Verbindung kostet den Funk spürbar Durchsatz. Genau
+/// deshalb kann hier kein echter Fortschritt abgefragt werden: Die Anzeige schätzt
+/// anhand der vergangenen Zeit und bleibt bewusst bei 95 % stehen, bis das Auge die
+/// Vollständigkeit bestätigt hat. Lieber ehrlich kurz vor dem Ziel warten als eine
+/// 100 % anzeigen, die noch nichts bedeutet.
 class _SlaveForwardDialog extends StatefulWidget {
   final EyeBle ble;
   final String eyeName;
@@ -221,130 +234,168 @@ class _SlaveForwardDialog extends StatefulWidget {
   State<_SlaveForwardDialog> createState() => _SlaveForwardDialogState();
 }
 
+enum _Phase { forwarding, confirming, done, failed }
+
 class _SlaveForwardDialogState extends State<_SlaveForwardDialog> {
-  String _status = 'Lade auf Slave...';
-  String _detail = 'Geschaetzt ~15 Sekunden';
-  bool   _done = false;
-  bool   _closed = false;          // Guard gegen doppeltes pop
-  bool   _pendingReconnect = false;
-  int    _reconnectAttempts = 0;
-  static const int _maxReconnects = 5;
-  // Notfall-Timeout: Dialog schliesst sich nach 90s auf jeden Fall.
-  // Verhindert haengenden Dialog wenn BLE-Reconnect aus irgendeinem Grund tot bleibt.
-  static const Duration _emergencyTimeout = Duration(seconds: 90);
+  _Phase _phase = _Phase.forwarding;
+  String _note = '';
+  bool   _closed = false;
+  int    _elapsedMs = 0;
+  int    _attempts = 0;
+  Timer? _ticker;
+  bool   _pendingRetry = false;
+
+  // Schaetzung fuer die Weitergabe. Seit der Master mehrere Haeppchen pro
+  // Schleifendurchlauf sendet, dauert sie wenige Sekunden statt einer Minute.
+  static const int _forwardEstimateMs = 6000;
+  static const int _maxAttempts = 6;
+  static const Duration _emergency = Duration(seconds: 60);
 
   @override
   void initState() {
     super.initState();
-    // Nach 15s Auto-Reconnect-Versuch
-    Future.delayed(const Duration(seconds: 15), _tryReconnect);
-    // Emergency-Close - falls alle anderen Wege fehlschlagen
-    Future.delayed(_emergencyTimeout, _emergencyClose);
+    _ticker = Timer.periodic(const Duration(milliseconds: 100), (_) {
+      if (!mounted || _closed) return;
+      setState(() => _elapsedMs += 100);
+      // Erst nach der geschaetzten Weitergabe verbinden - frueher wuerde die
+      // BLE-Verbindung dem Funk genau die Bandbreite nehmen, die er gerade braucht.
+      if (_phase == _Phase.forwarding && _elapsedMs >= _forwardEstimateMs) {
+        setState(() => _phase = _Phase.confirming);
+        _tryConfirm();
+      }
+    });
+    Future.delayed(_emergency, _giveUp);
     widget.ble.addListener(_onBleUpdate);
   }
 
   @override
   void dispose() {
+    _ticker?.cancel();
     widget.ble.removeListener(_onBleUpdate);
     super.dispose();
   }
 
-  /// Schliesst den Dialog genau einmal. Schuetzt vor double-pop falls mehrere
-  /// Future-Delayed gleichzeitig auf pop() abzielen.
   void _safePop(String? result) {
     if (_closed || !mounted) return;
     _closed = true;
+    _ticker?.cancel();
     Navigator.of(context).pop(result);
   }
 
-  /// Notfall-Schliesser nach 90s. Wenn _done schon true, dann tut diese
-  /// Funktion nichts (regulaerer Close laeuft schon). Sonst Force-Close.
-  void _emergencyClose() {
-    if (_closed || !mounted) return;
+  void _giveUp() {
+    if (_closed || !mounted || _phase == _Phase.done) return;
     setState(() {
-      _status = 'Zeitueberschreitung';
-      _detail = 'Konnte nicht abschliessen - bitte App neu oeffnen falls noetig';
-      _done = true;
+      _phase = _Phase.failed;
+      _note  = 'Keine Bestaetigung erhalten. Das Bild ist sehr wahrscheinlich trotzdem '
+               'auf beiden Augen - pruefe es einfach an der Augenauswahl.';
     });
-    _safePop(null);
+    Future.delayed(const Duration(seconds: 3), () => _safePop(null));
   }
 
   void _onBleUpdate() {
-    if (!mounted || _done || _closed) return;
-    // Wenn wir nach Reconnect eine Receipt sehen, Status updaten
-    final unique = widget.ble.slaveUniqueReceived;
-    final total  = widget.ble.slaveTotalChunks;
-    final round  = widget.ble.slaveReRequestRound;
-    if (total > 0) {
-      if (unique >= total) {
-        setState(() {
-          _status = 'Fertig!';
-          _detail = 'Bild komplett auf beiden Augen (${unique}/${total} Chunks)';
-          _done = true;
+    if (!mounted || _closed || _phase == _Phase.done) return;
+    final got   = widget.ble.slaveUniqueReceived;
+    final total = widget.ble.slaveTotalChunks;
+    if (total <= 0) return;
+
+    if (got >= total) {
+      setState(() { _phase = _Phase.done; _note = ''; });
+      Future.delayed(const Duration(milliseconds: 900), () {
+        _safePop('"${widget.eyeName}" ist auf beiden Augen');
+      });
+    } else {
+      // Unvollstaendig: der Master fordert die fehlenden Haeppchen selbst nach.
+      setState(() => _note = 'Fehlende Teile werden nachgefordert ($got von $total)');
+      if (!_pendingRetry) {
+        _pendingRetry = true;
+        Future.delayed(const Duration(seconds: 4), () {
+          _pendingRetry = false;
+          _tryConfirm();
         });
-        Future.delayed(const Duration(seconds: 2), () {
-          _safePop('"${widget.eyeName}" erfolgreich uebertragen ($unique/$total Chunks)');
-        });
-      } else {
-        setState(() {
-          _detail = 'Re-Request Runde $round laeuft: $unique/$total Chunks';
-        });
-        // Noch nicht komplett -> warte weiter, ggf. erneut Receipt holen.
-        // Guard: nur EIN Reconnect-Timer pro 5s-Fenster, sonst koennen viele
-        // Notifies in Serie viele parallele _tryReconnect-Calls triggern.
-        if (!_pendingReconnect) {
-          _pendingReconnect = true;
-          Future.delayed(const Duration(seconds: 5), () {
-            _pendingReconnect = false;
-            _tryReconnect();
-          });
-        }
       }
     }
   }
 
-  Future<void> _tryReconnect() async {
-    if (!mounted || _done) return;
-    _reconnectAttempts++;
-    if (_reconnectAttempts > _maxReconnects) {
-      setState(() {
-        _status = 'Konnte Slave-Status nicht abrufen';
-        _detail = 'Bild ist wahrscheinlich auf beiden Augen, aber keine Bestaetigung';
-        _done = true;
-      });
-      Future.delayed(const Duration(seconds: 2), () => _safePop(null));
-      return;
-    }
+  Future<void> _tryConfirm() async {
+    if (!mounted || _closed || _phase == _Phase.done) return;
+    if (++_attempts > _maxAttempts) return _giveUp();
     try {
-      if (!widget.ble.connected) {
-        setState(() { _detail = 'Reconnect $_reconnectAttempts/$_maxReconnects...'; });
-        await widget.ble.reconnect();
-      }
-    } catch (e) {
-      // Reconnect fehlgeschlagen, nochmal in 3s versuchen
-      Future.delayed(const Duration(seconds: 3), _tryReconnect);
+      if (!widget.ble.connected) await widget.ble.reconnect();
+    } catch (_) {
+      Future.delayed(const Duration(seconds: 2), _tryConfirm);
+    }
+  }
+
+  double get _progress {
+    switch (_phase) {
+      case _Phase.done:   return 1.0;
+      case _Phase.failed: return 1.0;
+      // Bis 95 % laufen lassen, den Rest erst bei echter Bestaetigung.
+      default: return (_elapsedMs / _forwardEstimateMs * 0.95).clamp(0.05, 0.95);
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final done = _phase == _Phase.done;
+    final failed = _phase == _Phase.failed;
     return AlertDialog(
-      title: Text(_status),
+      title: Text(done ? 'Fertig' : failed ? 'Ohne Bestaetigung' : 'Auge wird uebertragen'),
       content: Column(
         mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (!_done) const LinearProgressIndicator(),
-          const SizedBox(height: 16),
-          Text(_detail, textAlign: TextAlign.center),
+          _step(true, 'Auf das erste Auge', 'uebertragen'),
+          _step(_phase != _Phase.forwarding, 'Weitergabe ans zweite Auge',
+              _phase == _Phase.forwarding
+                  ? 'laeuft - ${(_elapsedMs / 1000).toStringAsFixed(0)} s'
+                  : 'uebertragen'),
+          _step(done, 'Bestaetigung vom zweiten Auge',
+              done ? 'vollstaendig' : failed ? 'ausgeblieben' : 'wird geholt'),
+          const SizedBox(height: 18),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: _progress,
+              minHeight: 6,
+              backgroundColor: Colors.white12,
+              color: failed ? kWarn : (done ? kGood : kAccent),
+            ),
+          ),
+          if (_note.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Text(_note, style: const TextStyle(fontSize: 12, color: Colors.white54)),
+          ],
         ],
       ),
       actions: [
-        if (!_done)
+        if (!done)
           TextButton(
-            onPressed: () => _safePop('Abgebrochen — Bild wird trotzdem fertig uebertragen'),
-            child: const Text('Abbrechen'),
+            onPressed: () => _safePop('Im Hintergrund weiter - das Auge macht fertig'),
+            child: const Text('Schliessen'),
           ),
       ],
+    );
+  }
+
+  Widget _step(bool complete, String title, String state) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 22, height: 22,
+            child: complete
+                ? const Icon(Icons.check_circle, size: 18, color: kGood)
+                : const Padding(
+                    padding: EdgeInsets.all(3),
+                    child: CircularProgressIndicator(strokeWidth: 2)),
+          ),
+          const SizedBox(width: 10),
+          Expanded(child: Text(title, style: const TextStyle(fontSize: 14))),
+          Text(state, style: const TextStyle(fontSize: 12, color: Colors.white38)),
+        ],
+      ),
     );
   }
 }
