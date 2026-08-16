@@ -30,6 +30,19 @@ class DiagnosticsScreen extends StatelessWidget {
                       ? 'Slave ist per Funk verbunden und synchron'
                       : 'Kein Funk-Kontakt - Slave stromlos oder ausser Reichweite',
             ),
+            if (ble.subscribeErrors.isNotEmpty)
+              Card(
+                color: kBad.withOpacity(0.15),
+                child: ListTile(
+                  leading: const Icon(Icons.error_outline, color: kBad),
+                  title: const Text('Abo fehlgeschlagen'),
+                  subtitle: Text(
+                    'Diese Characteristics liefern keine Live-Daten: '
+                    '${ble.subscribeErrors.join(", ")}. '
+                    'Die Verbindung laeuft trotzdem.',
+                  ),
+                ),
+              ),
             const SectionHeader('Verbindungsqualitaet', icon: Icons.speed),
             _infoCard(
               rows: [

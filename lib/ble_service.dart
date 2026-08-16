@@ -184,6 +184,9 @@ class EyeBle extends ChangeNotifier {
   bool authorized = false;
   /// Vom Master gemeldetes Auth-Level: 0 = gesperrt, 1 = Geraete-Code, 2 = Admin.
   int authLevel = 0;
+  /// UUID-Kurzformen der Characteristics, deren Abo beim Verbinden scheiterte.
+  /// Leer = alles in Ordnung. Wird in der Diagnose angezeigt.
+  final List<String> subscribeErrors = [];
   bool authSupported = false;  // false = alte Firmware ohne Auth-Charakteristik
   // Zaehlt hoch bei jedem fehlgeschlagenen Code-Versuch (fuer UI-Feedback).
   int authAttempts = 0;
@@ -485,62 +488,63 @@ class EyeBle extends ChangeNotifier {
     }
   }
 
+  /// Abonniert eine Characteristic, ohne dass ein Fehlschlag die ganze Verbindung
+  /// reisst. Vorher brach ein einziges scheiterndes Abo `connectAndDiscover` ab -
+  /// und die Fehlermeldung verriet nicht einmal, welches. Jetzt merken wir uns die
+  /// betroffene UUID und machen weiter; die Diagnose zeigt sie an.
+  Future<StreamSubscription<List<int>>?> _subscribe(
+      Guid uuid, void Function(List<int>) onData) async {
+    final c = _chars[uuid];
+    if (c == null) return null;
+    try {
+      await c.setNotifyValue(true);
+      return c.lastValueStream.listen(onData);
+    } catch (e) {
+      final short = uuid.str.length >= 8 ? uuid.str.substring(4, 8) : uuid.str;
+      subscribeErrors.add(short);
+      notifyListeners();
+      return null;
+    }
+  }
+
   Future<void> _subscribeNotifies() async {
-    final ce = _chars[EyeUuids.chrEyeId];
-    if (ce != null) {
-      await ce.setNotifyValue(true);
-      _subEyeId = ce.lastValueStream.listen((v) {
-        if (v.isNotEmpty) { eyeId = v[0]; notifyListeners(); }
-      });
-    }
+    subscribeErrors.clear();
+
+    _subEyeId = await _subscribe(EyeUuids.chrEyeId, (v) {
+      if (v.isNotEmpty) { eyeId = v[0]; notifyListeners(); }
+    });
     // Funk-Status live mitverfolgen (Master notifyt 1x/s).
-    final cl = _chars[EyeUuids.chrSlaveLink];
-    if (cl != null) {
-      await cl.setNotifyValue(true);
-      _subSlaveLink = cl.lastValueStream.listen((v) {
-        if (v.isNotEmpty) { slaveLinked = v[0] == 1; notifyListeners(); }
-      });
-    }
+    _subSlaveLink = await _subscribe(EyeUuids.chrSlaveLink, (v) {
+      if (v.isNotEmpty) { slaveLinked = v[0] == 1; notifyListeners(); }
+    });
     // ESP-NOW-Verbindungsqualitaet live (state / silence / loss).
-    final cd = _chars[EyeUuids.chrLinkDiag];
-    if (cd != null) {
-      await cd.setNotifyValue(true);
-      _subLinkDiag = cd.lastValueStream.listen((v) {
-        if (v.length >= 4) { _parseLinkDiag(v); notifyListeners(); }
-      });
-    }
-    final crcp = _chars[EyeUuids.chrSlaveReceipt];
-    if (crcp != null) {
-      await crcp.setNotifyValue(true);
-      _subSlaveReceipt = crcp.lastValueStream.listen((v) {
-        if (v.length >= 6) { _parseReceipt(v); notifyListeners(); }
-      });
-    }
+    _subLinkDiag = await _subscribe(EyeUuids.chrLinkDiag, (v) {
+      if (v.length >= 4) { _parseLinkDiag(v); notifyListeners(); }
+    });
+    _subSlaveReceipt = await _subscribe(EyeUuids.chrSlaveReceipt, (v) {
+      if (v.length >= 6) { _parseReceipt(v); notifyListeners(); }
+    });
     // chrSlotStatus wird nur EINMAL via _readAll gelesen - kein Notify-Subscribe,
     // weil das beim ESP zu BLE-Coex-Druck waehrend Forward gefuehrt hat.
 
     // --- Kopplung: ein Fund pro Notify (8 Bytes), Zustand als 9-Byte-Block ---
-    final cpf = _chars[EyeUuids.chrPairFound];
-    if (cpf != null) {
-      await cpf.setNotifyValue(true);
-      _subPairFound = cpf.lastValueStream.listen((v) {
-        if (v.length < 8) return;
-        final mac = v.sublist(0, 6);
-        if (pairingFound.any((f) => _macEq(f.mac, mac))) return;
-        final rssi = v[6] > 127 ? v[6] - 256 : v[6];   // int8
-        pairingFound.add(FoundSlave(
-          mac, rssi, (v[7] & 0x01) != 0, (v[7] & 0x02) != 0));
-        notifyListeners();
-      });
-    }
+    _subPairFound = await _subscribe(EyeUuids.chrPairFound, (v) {
+      if (v.length < 8) return;
+      final mac = v.sublist(0, 6);
+      if (pairingFound.any((f) => _macEq(f.mac, mac))) return;
+      final rssi = v[6] > 127 ? v[6] - 256 : v[6];   // int8
+      pairingFound.add(FoundSlave(
+        mac, rssi, (v[7] & 0x01) != 0, (v[7] & 0x02) != 0));
+      notifyListeners();
+    });
+    _subPairState = await _subscribe(EyeUuids.chrPairState, (v) {
+      if (v.length < 9) return;
+      _parsePairState(v);
+      notifyListeners();
+    });
+    // Startwert des Kopplungs-Zustands, damit der Screen nicht bei Null beginnt.
     final cps = _chars[EyeUuids.chrPairState];
     if (cps != null) {
-      await cps.setNotifyValue(true);
-      _subPairState = cps.lastValueStream.listen((v) {
-        if (v.length < 9) return;
-        _parsePairState(v);
-        notifyListeners();
-      });
       try {
         final init = await cps.read();
         if (init.length >= 9) _parsePairState(init);
