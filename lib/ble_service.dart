@@ -28,7 +28,9 @@ class EyeUuids {
   static final Guid chrPairState    = Guid("6E400014-B5A3-F393-E0A9-E50E24DCCA9E");  // READ/NOTIFY: Zustand
   // Augen-Ausrichtung auf die Maske (je Auge) und Bewegung (fuers Paar)
   static final Guid chrEyeGeom      = Guid("6E400015-B5A3-F393-E0A9-E50E24DCCA9E");  // READ/WRITE
-  static final Guid chrAnimCfg      = Guid("6E400018-B5A3-F393-E0A9-E50E24DCCA9E");  // READ/WRITE/NOTIFY
+  // Bewusst OHNE Notify - NimBLE hat pro Verbindung nur ~8 CCCD-Slots, und die sind
+  // bereits vergeben. Der Stand wird nach jedem Schreibvorgang aktiv gelesen.
+  static final Guid chrAnimCfg      = Guid("6E400018-B5A3-F393-E0A9-E50E24DCCA9E");  // READ/WRITE
 
   static final Guid svcDiag      = Guid("6E400010-B5A3-F393-E0A9-E50E24DCCA9E");
   // Funk-Status: 1 = zweiter Screen (Slave) per ESP-NOW verbunden, 0 = nicht.
@@ -236,7 +238,6 @@ class EyeBle extends ChangeNotifier {
 
   // --- Bewegung (fuers Paar) ---
   AnimCfg? animCfg;                 // null = noch nicht gelesen
-  StreamSubscription<List<int>>? _subAnimCfg;
 
   // Slot-Bitmap (Bit n = Slot n hat ein Bild auf dem Master in LittleFS).
   // Wird nur EINMAL beim Connect aus CHR_SLOT_STATUS gelesen (kein Notify mehr -
@@ -426,7 +427,6 @@ class EyeBle extends ChangeNotifier {
     await _subAuthStatus?.cancel();
     await _subPairFound?.cancel();
     await _subPairState?.cancel();
-    await _subAnimCfg?.cancel();
     await _subConn?.cancel();
     _chars.clear();
     try { await device?.disconnect(); } catch (_) {}
@@ -559,21 +559,26 @@ class EyeBle extends ChangeNotifier {
       } catch (_) {}
     }
 
-    // --- Bewegung: lesen + abonnieren. Die Firmware meldet nach Voreinstellung,
-    //     Werkseinstellung und jeder Klemmung den tatsaechlichen Stand zurueck. ---
+    // --- Bewegung: nur lesen, KEIN Abo. NimBLE haelt pro Verbindung nur begrenzt
+    //     viele CCCD-Slots vor (Standard 8), und die waren bereits vergeben - ein
+    //     neuntes Abo scheitert mit GATT_WRITE_NOT_PERMITTED und riss die ganze
+    //     Verbindung mit. Den Stand holen wir nach jedem Schreibvorgang aktiv ab.
+    await _readAnimCfg();
+  }
+
+  /// Holt den tatsaechlichen Stand aus der Firmware. Wichtig nach Voreinstellung,
+  /// Werkseinstellung und nach jedem Setzen: die Firmware klemmt Werte auf gueltige
+  /// Bereiche, und die Regler sollen zeigen, was das Auge wirklich macht.
+  Future<void> _readAnimCfg() async {
     final ca = _chars[EyeUuids.chrAnimCfg];
-    if (ca != null) {
-      await ca.setNotifyValue(true);
-      _subAnimCfg = ca.lastValueStream.listen((v) {
-        if (v.length < AnimCfg.byteLength) return;
+    if (ca == null) return;
+    try {
+      final v = await ca.read();
+      if (v.length >= AnimCfg.byteLength) {
         animCfg = AnimCfg.fromBytes(v);
         notifyListeners();
-      });
-      try {
-        final v = await ca.read();
-        if (v.length >= AnimCfg.byteLength) animCfg = AnimCfg.fromBytes(v);
-      } catch (_) {}
-    }
+      }
+    } catch (_) {}
   }
 
   /// Byte als vorzeichenbehaftet lesen - y_off kann negativ sein.
@@ -604,14 +609,23 @@ class EyeBle extends ChangeNotifier {
     animCfg = cfg;
     notifyListeners();
     await _animCmd(persist ? 1 : 0, 0, cfg.toBytes());
+    // Beim Speichern den geklemmten Stand zurueckholen. Waehrend des Ziehens nicht -
+    // das waere ein zusaetzlicher Funkweg pro Reglerbewegung.
+    if (persist) await _readAnimCfg();
   }
 
-  /// Voreinstellung anwenden (0 ruhig, 1 normal, 2 lebhaft). Die Werte kommen aus
-  /// der Firmware und werden anschliessend per Notify zurueckgemeldet.
-  Future<void> applyAnimPreset(int index) => _animCmd(3, index);
+  /// Voreinstellung anwenden (0 ruhig, 1 normal, 2 lebhaft). Die Werte selbst liegen
+  /// in der Firmware; anschliessend holen wir den neuen Stand ab.
+  Future<void> applyAnimPreset(int index) async {
+    await _animCmd(3, index);
+    await _readAnimCfg();
+  }
 
   /// Zurueck auf die Werkseinstellung der Firmware.
-  Future<void> resetAnimCfg() => _animCmd(2, 0);
+  Future<void> resetAnimCfg() async {
+    await _animCmd(2, 0);
+    await _readAnimCfg();
+  }
 
   /// Hilfslinien an den Kanten des sichtbaren Bandes ein-/ausblenden - auf beiden Augen.
   Future<void> setEyeGuides(bool on) => _animCmd(4, on ? 1 : 0);
