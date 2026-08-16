@@ -71,8 +71,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       content: Text(ok
-          ? 'Zugangscode geaendert - gilt ab sofort'
-          : 'Konnte Code nicht setzen (nicht autorisiert?)'),
+          ? 'Zugangscode geaendert und geprueft - gilt ab sofort'
+          : 'Code NICHT geaendert - der alte gilt weiter'),
     ));
   }
 

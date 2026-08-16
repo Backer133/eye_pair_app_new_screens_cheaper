@@ -49,10 +49,16 @@ const int kDefaultDeviceKey = 123456;
 
 /// Ein vom Master gefundener koppelbarer Slave (aus CHR_PAIR_FOUND).
 class FoundSlave {
-  final List<int> mac;     // 6 Bytes
-  final int rssi;          // dBm, negativ
-  final bool alreadyBound; // true = gehoert schon zu einem anderen Master
-  const FoundSlave(this.mac, this.rssi, this.alreadyBound);
+  final List<int> mac;      // 6 Bytes
+  final int rssi;           // dBm, negativ
+  final bool alreadyBound;  // gebunden - egal an wen
+  final bool boundToOther;  // gebunden an einen ANDEREN Master als diesen
+  const FoundSlave(this.mac, this.rssi, this.alreadyBound, this.boundToOther);
+
+  /// Gehoert zu genau dem Master, mit dem die App gerade verbunden ist.
+  bool get boundToThisMaster => alreadyBound && !boundToOther;
+  /// Frei zum Koppeln.
+  bool get free => !alreadyBound;
 
   String get macStr =>
       mac.map((b) => b.toRadixString(16).padLeft(2, '0').toUpperCase()).join(':');
@@ -288,10 +294,18 @@ class EyeBle extends ChangeNotifier {
   /// App-Start wird wieder danach gefragt.
   Future<bool> changeDeviceKey(int newKey) async {
     final c = _chars[EyeUuids.chrSetKey];
-    if (c == null || newKey < 0 || newKey > 999999) return false;
+    if (c == null || locked || newKey < 0 || newKey > 999999) return false;
     await _writeKey(c, newKey);
-    _sessionKey = newKey;
-    return true;
+    // Gegenprobe: mit dem neuen Code neu autorisieren. Die Firmware liest den
+    // Schluessel nicht zurueck - er liegt dort nur als Hash - also ist das der
+    // einzige Weg festzustellen, ob der Wechsel wirklich angekommen ist.
+    // Ohne diese Pruefung meldete die App auch dann Erfolg, wenn der Write
+    // verworfen wurde, und der Nutzer verliesse sich auf einen Code, der nicht gilt.
+    // Nebenwirkung: War die Sitzung als Admin angemeldet, faellt sie damit auf
+    // die normale Geraete-Berechtigung zurueck.
+    final ok = await authenticateWith(newKey);
+    if (ok) _sessionKey = newKey;
+    return ok;
   }
 
   /// Setzt den frei waehlbaren Anzeigenamen des Augenpaars (nur wenn autorisiert).
@@ -426,7 +440,8 @@ class EyeBle extends ChangeNotifier {
         final mac = v.sublist(0, 6);
         if (pairingFound.any((f) => _macEq(f.mac, mac))) return;
         final rssi = v[6] > 127 ? v[6] - 256 : v[6];   // int8
-        pairingFound.add(FoundSlave(mac, rssi, (v[7] & 0x01) != 0));
+        pairingFound.add(FoundSlave(
+          mac, rssi, (v[7] & 0x01) != 0, (v[7] & 0x02) != 0));
         notifyListeners();
       });
     }
