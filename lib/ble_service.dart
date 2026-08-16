@@ -590,6 +590,16 @@ class EyeBle extends ChangeNotifier {
 
   // ===== Augen-Ausrichtung und Bewegung =====
 
+  // Drossel fuer Vorschau-Sendungen. Ein gezogener Regler feuert ~60 Ereignisse pro
+  // Sekunde; jedes davon loest am Master einen Funk-Weiterleitung aus. Ungedrosselt
+  // staut sich der BLE-Stack auf und die Bedienung ruckelt. Der Endwert geht beim
+  // Loslassen immer raus, ungedrosselt.
+  static const Duration _previewGap = Duration(milliseconds: 250);
+  DateTime _lastGeomPreview = DateTime.fromMillisecondsSinceEpoch(0);
+  DateTime _lastAnimPreview = DateTime.fromMillisecondsSinceEpoch(0);
+
+  bool _throttled(DateTime last) => DateTime.now().difference(last) < _previewGap;
+
   /// Setzt die Ausrichtung eines Auges. [target] 0 = Master, 1 = Slave.
   /// [persist] false = nur Vorschau (waehrend des Regler-Ziehens, kein Flash-Schreiben),
   /// true = uebernehmen und speichern.
@@ -599,9 +609,17 @@ class EyeBle extends ChangeNotifier {
     eyeYOff[target] = yOff;
     eyeVisH[target] = visH;
     notifyListeners();
+    if (!persist) {
+      if (_throttled(_lastGeomPreview)) return;
+      _lastGeomPreview = DateTime.now();
+    }
     await c.write([target, yOff & 0xFF, visH & 0xFF, persist ? 1 : 0],
         withoutResponse: false);
   }
+
+  /// Setzt Ausrichtung zurueck: Auge mittig, nichts abgedeckt.
+  Future<void> resetEyeGeom(int target) =>
+      setEyeGeom(target, 0, 240, persist: true);
 
   Future<void> _animCmd(int cmd, int arg, [Uint8List? payload]) async {
     final c = _chars[EyeUuids.chrAnimCfg];
@@ -612,6 +630,10 @@ class EyeBle extends ChangeNotifier {
   Future<void> setAnimCfg(AnimCfg cfg, {bool persist = false}) async {
     animCfg = cfg;
     notifyListeners();
+    if (!persist) {
+      if (_throttled(_lastAnimPreview)) return;
+      _lastAnimPreview = DateTime.now();
+    }
     await _animCmd(persist ? 1 : 0, 0, cfg.toBytes());
     // Beim Speichern den geklemmten Stand zurueckholen. Waehrend des Ziehens nicht -
     // das waere ein zusaetzlicher Funkweg pro Reglerbewegung.
@@ -669,6 +691,9 @@ class EyeBle extends ChangeNotifier {
   Future<void> stopPairingScan()            => _pairCmd(0x02);
   /// Laesst das Auge 5 s blinken - so erkennt der Nutzer, welcher Slave gemeint ist.
   Future<void> identifySlave(List<int> mac) => _pairCmd(0x03, mac);
+  /// Laesst den MASTER blinken. Braucht ein eigenes Kommando, weil die App die
+  /// MAC des Masters gar nicht kennt.
+  Future<void> identifySelf()               => _pairCmd(0x07);
   Future<void> bindSlave(List<int> mac)     => _pairCmd(0x04, mac);
   Future<void> unbindOwn()                  => _pairCmd(0x05);
   /// Nur mit Admin-Code: loest die Bindung eines fremden Slaves (defekter Master).
