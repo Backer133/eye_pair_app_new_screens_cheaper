@@ -88,10 +88,17 @@ class EyeBle extends ChangeNotifier {
   int linkState = 0;    // PairState: 4=LINKED 5=DEGRADED 6=LOST (siehe linkStateName)
   int silenceMs = 0;    // ms seit letztem Signal vom Slave
   int lossPct   = 0;    // Master->Slave Unicast-Verlustrate in %
+  // WLAN-Kanal des Masters und der zuletzt vom Slave gemeldete Kanal (0 = unbekannt).
+  // Bei bestehender Verbindung sind beide zwangslaeufig gleich - ESP-NOW funktioniert
+  // nur so. Auseinanderlaufende Werte heissen: der Slave sucht noch.
+  int masterChannel = 0;
+  int slaveChannel  = 0;
   StreamSubscription<List<int>>? _subLinkDiag;
   bool connected = false;
   // Zugangsschutz: true = Verbindung ist autorisiert (Steuerung freigeschaltet).
   bool authorized = false;
+  /// Vom Master gemeldetes Auth-Level: 0 = gesperrt, 1 = Geraete-Code, 2 = Admin.
+  int authLevel = 0;
   bool authSupported = false;  // false = alte Firmware ohne Auth-Charakteristik
   // Zaehlt hoch bei jedem fehlgeschlagenen Code-Versuch (fuer UI-Feedback).
   int authAttempts = 0;
@@ -131,6 +138,9 @@ class EyeBle extends ChangeNotifier {
       case 2: return 'Der Slave gehoert schon zu einem anderen Master';
       case 3: return 'Dafuer wird der Admin-Code gebraucht';
       case 4: return 'Slave nicht gefunden';
+      case 5: return 'Eigene Kopplung geloest, aber der Slave hat sich nicht '
+                     'gemeldet - er haelt sich weiter fuer gebunden. Mit dem '
+                     'Admin-Code zwangsloesen.';
       default: return '';
     }
   }
@@ -180,7 +190,12 @@ class EyeBle extends ChangeNotifier {
   bool get locked => authSupported && !authorized;
 
   /// Klartext des ESP-NOW-Verbindungszustands (PairState aus der Firmware).
+  ///
+  /// Ohne Kopplung steht die Firmware bewusst in PS_LOST (die Discovery-Maschinerie
+  /// ist stillgelegt). "Verloren" laese sich dort als Stoerung, obwohl schlicht noch
+  /// kein Partner gebunden ist - deshalb der eigene Text.
   String get linkStateName {
+    if (!isBound) return 'Nicht gekoppelt';
     switch (linkState) {
       case 4: return 'Verbunden';
       case 5: return 'Instabil';
@@ -195,6 +210,7 @@ class EyeBle extends ChangeNotifier {
   /// CHR_AUTH_STATUS liefert das Auth-Level: 0 = gesperrt, 1 = Geraete-Code,
   /// 2 = Admin-Code. Aeltere Firmware kennt nur 0/1 - deshalb ">= 1" statt "== 1".
   void _parseAuthLevel(int level) {
+    authLevel  = level;
     authorized = level >= 1;
     isAdmin    = level >= 2;
   }
@@ -248,9 +264,12 @@ class EyeBle extends ChangeNotifier {
   Future<bool> authenticateWith(int key) async {
     final c = _chars[EyeUuids.chrAuth];
     if (c == null) return false;
+    // Auf die AENDERUNG des Levels warten, nicht auf "authorized". Sonst laeuft
+    // ein Wechsel vom Geraete- auf den Admin-Code sofort durch, ohne dass die
+    // Antwort der Firmware da ist - isAdmin waere dann noch nicht gesetzt.
+    final before = authLevel;
     await _writeKey(c, key);
-    // Auf die CHR_AUTH_STATUS-Notify der Firmware warten (bis ~1s).
-    for (int i = 0; i < 20 && !authorized; i++) {
+    for (int i = 0; i < 20 && authLevel == before; i++) {
       await Future.delayed(const Duration(milliseconds: 50));
     }
     if (authorized) {
@@ -311,6 +330,7 @@ class EyeBle extends ChangeNotifier {
     try { await device?.disconnect(); } catch (_) {}
     connected = false;
     authorized = false;
+    authLevel = 0;
     authSupported = false;
     slaveLinked = false;
     pairingFound.clear();
@@ -356,6 +376,11 @@ class EyeBle extends ChangeNotifier {
     linkState = v[0];
     silenceMs = v[1] | (v[2] << 8);
     lossPct   = v[3];
+    // Bytes 4/5 kamen erst spaeter dazu - aeltere Firmware sendet nur 4 Bytes.
+    if (v.length >= 6) {
+      masterChannel = v[4];
+      slaveChannel  = v[5];
+    }
   }
 
   Future<void> _subscribeNotifies() async {

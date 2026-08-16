@@ -59,6 +59,42 @@ class _PairingScreenState extends State<PairingScreen> {
     await widget.ble.bindSlave(f.mac);
   }
 
+  /// Wechselt den Zugangscode auf der LAUFENDEN Verbindung. Ohne das muesste man
+  /// erst trennen und neu verbinden, nur um an eine Admin-Funktion zu kommen -
+  /// und beim Trennen geht die Sitzung samt gemerktem Code verloren.
+  Future<void> _loginAsAdmin() async {
+    final ctrl = TextEditingController();
+    final code = await showDialog<int>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Admin-Code eingeben'),
+        content: TextField(
+          controller: ctrl,
+          keyboardType: TextInputType.number,
+          maxLength: 6,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: '6-stelliger Code',
+            counterText: '',
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Abbrechen')),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, int.tryParse(ctrl.text)),
+            child: const Text('Anmelden'),
+          ),
+        ],
+      ),
+    );
+    if (code == null || !mounted) return;
+    await widget.ble.authenticateWith(code);
+    if (!mounted) return;
+    _snack(widget.ble.isAdmin
+        ? 'Als Admin angemeldet'
+        : 'Kein Admin-Code - Zwangsloesen bleibt gesperrt');
+  }
+
   /// Nur mit Admin-Code: loest die Bindung eines fremden Slaves.
   Future<void> _forceUnbind(FoundSlave f) async {
     final ok = await showDialog<bool>(
@@ -109,7 +145,17 @@ class _PairingScreenState extends State<PairingScreen> {
       builder: (context, _) {
         final ble = widget.ble;
         return Scaffold(
-          appBar: AppBar(title: const Text('Slave koppeln')),
+          appBar: AppBar(
+            title: const Text('Slave koppeln'),
+            actions: [
+              if (!ble.isAdmin)
+                IconButton(
+                  icon: const Icon(Icons.admin_panel_settings_outlined),
+                  tooltip: 'Als Admin anmelden',
+                  onPressed: _loginAsAdmin,
+                ),
+            ],
+          ),
           body: Column(
             children: [
               if (ble.isBound)
