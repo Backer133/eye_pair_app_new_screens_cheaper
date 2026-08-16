@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import '../ble_service.dart';
 import '../theme.dart';
+import 'pairing_screen.dart';
 
 class SettingsScreen extends StatefulWidget {
   final EyeBle ble;
@@ -182,6 +183,30 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
               ),
             ],
+
+            // ---- Paar-Kopplung ----
+            const SectionHeader('Augenpaar koppeln', icon: Icons.cable),
+            Card(
+              child: ListTile(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                leading: _iconBox(ble.isBound ? Icons.link : Icons.link_off,
+                                  ble.isBound ? kGood : kWarn),
+                title: const Text('Slave koppeln',
+                    style: TextStyle(fontWeight: FontWeight.w700)),
+                subtitle: Text(ble.isBound
+                    ? 'Gekoppelt mit ${ble.boundMacStr}'
+                    : 'Noch kein zweites Auge gekoppelt'),
+                trailing: const Icon(Icons.chevron_right, color: Colors.white38),
+                enabled: !ble.locked,
+                onTap: ble.locked
+                    ? null
+                    : () => Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => PairingScreen(ble: ble),
+                          ),
+                        ),
+              ),
+            ),
 
             const SizedBox(height: 36),
             Center(
