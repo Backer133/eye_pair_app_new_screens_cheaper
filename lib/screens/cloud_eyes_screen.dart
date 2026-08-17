@@ -187,10 +187,19 @@ class _CloudEyesScreenState extends State<CloudEyesScreen> {
                             child: ListTile(
                               leading: ClipRRect(
                                 borderRadius: BorderRadius.circular(8),
+                                // Kleines Vorschaubild (~5 KB) statt des vollen Auges
+                                // (~1,5 MB). Fehlt es - etwa weil ein Auge neu ist und
+                                // die Vorschau noch nicht erzeugt wurde - wird das volle
+                                // Bild nachgeladen, damit die Liste trotzdem etwas zeigt.
                                 child: Image.network(
-                                  e.downloadUrl,
+                                  e.thumbUrl,
                                   width: 56, height: 56, fit: BoxFit.cover,
-                                  errorBuilder: (_, __, ___) => const Icon(Icons.broken_image),
+                                  errorBuilder: (_, __, ___) => Image.network(
+                                    e.downloadUrl,
+                                    width: 56, height: 56, fit: BoxFit.cover,
+                                    errorBuilder: (_, __, ___) =>
+                                        const Icon(Icons.broken_image),
+                                  ),
                                 ),
                               ),
                               title: Text(e.name),
