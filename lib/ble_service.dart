@@ -258,6 +258,27 @@ class EyeBle extends ChangeNotifier {
     device = d;
     await d.connect(timeout: const Duration(seconds: 10), autoConnect: false);
 
+    // Groessere BLE-Pakete aushandeln, bevor irgendetwas uebertragen wird.
+    //
+    // Beim Cloud-Auge zaehlt fast nur die Anzahl der Pakete: jedes kostet rund ein
+    // Verbindungsintervall, weil auf die Bestaetigung des Auges gewartet wird - egal
+    // wie voll es ist. Mit der bisherigen MTU (255, NimBLE-Voreinstellung) waren das
+    // 861 Pakete fuer ein Bild.
+    //
+    // Die Haeppchengroesse wird bewusst aus dem TATSAECHLICH gewaehrten Wert berechnet
+    // und nicht fest gesetzt: ein Auge mit aelterer Firmware gewaehrt weiterhin nur 255,
+    // und die App muss sich danach richten, statt mit zu grossen Paketen aufzulaufen.
+    try {
+      final mtu = await d.requestMtu(512);
+      // 3 Byte ATT-Kopf, 6 Byte eigener Kopf. Untergrenze ist der bisherige Wert,
+      // damit sich am Verhalten gegenueber alter Firmware nichts aendert.
+      _chunkSize = (mtu - 9).clamp(_kChunkSizeMin, _kChunkSizeMax);
+    } catch (_) {
+      // Schlaegt die Aushandlung fehl, bleibt es beim bisherigen Wert - der hat
+      // immer funktioniert.
+      _chunkSize = _kChunkSizeMin;
+    }
+
     _subConn = d.connectionState.listen((s) {
       connected = (s == BluetoothConnectionState.connected);
       notifyListeners();
@@ -753,7 +774,13 @@ class EyeBle extends ChangeNotifier {
   // Payload: max 238 Byte data
   // Master quittiert nicht jeden Chunk - wir nutzen WRITE-WITH-RESPONSE damit
   // die BLE-Stack-Bestaetigung Flow-Control macht.
-  static const int _kChunkSize = 238;
+  //
+  // Die Groesse ist nicht mehr fest, sondern ergibt sich aus der beim Verbinden
+  // ausgehandelten MTU (siehe connectAndDiscover). 238 war der alte feste Wert und
+  // bleibt die Untergrenze; 503 ist das Maximum bei MTU 512.
+  static const int _kChunkSizeMin = 238;
+  static const int _kChunkSizeMax = 503;
+  int _chunkSize = _kChunkSizeMin;
 
   Future<bool> uploadEye(int slot, Uint8List rgb565data,
                           {void Function(int sent, int total)? onProgress}) async {
@@ -764,12 +791,12 @@ class EyeBle extends ChangeNotifier {
     if (rgb565data.length != kRgb565ByteCount) {
       throw Exception('rgb565data muss genau $kRgb565ByteCount Bytes haben (ist ${rgb565data.length})');
     }
-    final total = (rgb565data.length + _kChunkSize - 1) ~/ _kChunkSize;
+    final total = (rgb565data.length + _chunkSize - 1) ~/ _chunkSize;
     for (int i = 0; i < total; i++) {
-      final start = i * _kChunkSize;
-      final end   = (start + _kChunkSize) > rgb565data.length
+      final start = i * _chunkSize;
+      final end   = (start + _chunkSize) > rgb565data.length
                     ? rgb565data.length
-                    : (start + _kChunkSize);
+                    : (start + _chunkSize);
       final payload = <int>[
         0x01, slot,
         i & 0xFF, (i >> 8) & 0xFF,
