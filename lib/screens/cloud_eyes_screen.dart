@@ -245,9 +245,14 @@ class _SlaveForwardDialogState extends State<_SlaveForwardDialog> {
   Timer? _ticker;
   bool   _pendingRetry = false;
 
-  // Schaetzung fuer die Weitergabe. Seit der Master mehrere Haeppchen pro
-  // Schleifendurchlauf sendet, dauert sie wenige Sekunden statt einer Minute.
-  static const int _forwardEstimateMs = 6000;
+  // Schaetzung fuer die Weitergabe, am Seriellen Log gemessen: der Master schafft
+  // rund 130 Haeppchen je Sekunde, also gut 7 s fuer 891 Stueck. Dazu etwa 1,5 s
+  // Wartezeit, bis er nach dem Trennen der BLE-Verbindung anfaengt, und die Zeit,
+  // die der Slave zum Schreiben der 200 KB braucht.
+  // Grosszuegig gerechnet: eine zu frueh aufgebaute Verbindung kostet mehr, als ein
+  // paar Sekunden laenger zu warten - der Master pausiert dann zwar nicht mehr,
+  // aber BLE und WLAN teilen sich weiterhin dieselbe Antenne.
+  static const int _forwardEstimateMs = 11000;
   static const int _maxAttempts = 6;
   static const Duration _emergency = Duration(seconds: 60);
 
