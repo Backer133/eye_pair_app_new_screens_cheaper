@@ -65,8 +65,10 @@ class _MotionScreenState extends State<MotionScreen> {
         final tempo = _inv(cfg.holdMs, 8000, 1500);
         // Seitlich reicht der Regler weiter als vertikal: im Maskenschlitz ist nach
         // links und rechts viel mehr zu sehen, dieselbe Pixelzahl wirkt dort also
-        // schwaecher. Die Grenzen decken die drei Voreinstellungen ab (18 / 26 / 34).
-        final range = _inv(cfg.ampX, 10, 36);
+        // schwaecher. Das obere Ende sind 40 px - genau der Ueberschuss, den das
+        // 320er-Bild ueber den 240er-Bildschirm hinaus hat. Mehr ginge nicht, ohne
+        // dass am Rand eine Luecke aufreisst.
+        final range = _inv(cfg.ampX, 10, 40);
         final blink = _inv(cfg.blinkWindowMs, 12000, 2000);
 
         return Scaffold(
@@ -94,7 +96,7 @@ class _MotionScreenState extends State<MotionScreen> {
               _dial('Bewegungsumfang', 'Wie weit der Blick vom Mittelpunkt abweicht',
                   range, 'knapp', 'weit',
                   (t) => cfg.copyWith(
-                        ampX: _map(t, 10, 36),
+                        ampX: _map(t, 10, 40),
                         ampY: _map(t, 4, 14),
                       )),
               _dial('Blinzeln', 'Wie haeufig das Auge zwinkert',
