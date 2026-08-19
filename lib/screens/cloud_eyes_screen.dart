@@ -65,7 +65,8 @@ class _CloudEyesScreenState extends State<CloudEyesScreen> {
         setState(() { _downloadDone = sent; _downloadTotal = total; });
       });
       // Slot-Metadata persistieren
-      await SlotMetadataStore.set(widget.ble.deviceId, slot, eye.name, eye.downloadUrl);
+      await SlotMetadataStore.set(widget.ble.deviceId, slot, eye.name,
+                                  eye.downloadUrl, eye.thumbUrl);
       await widget.onSlotMetaChanged?.call();
       // Cloud-Tab Liste aktualisieren (Bild verschwindet weil installiert)
       await _refresh();

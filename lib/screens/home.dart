@@ -265,9 +265,14 @@ class _EyeGrid extends StatelessWidget {
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(10),
                       child: isCloud
+                          // tileUrl statt url: das kleine Vorschaubild (~5 KB) statt des
+                          // vollen Auges (~1,5 MB). Bei vier belegten Slots waren das
+                          // sonst rund 6 MB bei jedem Oeffnen - fuer vier Kacheln von
+                          // 56 dp Kantenlaenge. Aeltere Eintraege ohne Vorschau liefern
+                          // weiterhin das volle Bild.
                           ? (meta != null
                               ? Image.network(
-                                  meta.url,
+                                  meta.tileUrl,
                                   fit: BoxFit.cover,
                                   cacheWidth: 200,
                                   errorBuilder: (_, __, ___) =>
