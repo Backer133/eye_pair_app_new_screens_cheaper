@@ -46,6 +46,64 @@ class _HomeScreenState extends State<HomeScreen> {
     if (mounted) setState(() {});
   }
 
+  /// Auswahl beim langen Druck auf einen Cloud-Slot.
+  ///
+  /// Frueher loeschte der lange Druck sofort. Dazu kommt jetzt "erneut senden": Bricht
+  /// die Funkuebertragung ab - etwa weil eines der Augen neu startet - hat der Master das
+  /// Bild vollstaendig, der Slave aber nicht. Ohne diesen Weg muesste man die 200 KB
+  /// noch einmal komplett vom Handy hochladen, nur um eine Uebertragung anzustossen,
+  /// die der Master allein erledigen kann.
+  Future<void> _slotActions(int slot) async {
+    final name = _slotMeta[slot]?.name;
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              dense: true,
+              title: Text(name != null ? '"$name"' : 'Cloud-Slot ${slot + 1}',
+                  style: Theme.of(ctx).textTheme.titleMedium),
+            ),
+            const Divider(height: 1),
+            ListTile(
+              leading: const Icon(Icons.cast_connected),
+              title: const Text('Erneut ans zweite Auge senden'),
+              subtitle: const Text('Wenn nur das erste Auge das Bild zeigt'),
+              onTap: () => Navigator.pop(ctx, 'reforward'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete_outline),
+              title: const Text('Slot loeschen'),
+              subtitle: const Text('Entfernt das Bild von beiden Augen'),
+              onTap: () => Navigator.pop(ctx, 'delete'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (action == 'delete')    await _deleteSlot(slot);
+    if (action == 'reforward') await _reforwardSlot(slot);
+  }
+
+  Future<void> _reforwardSlot(int slot) async {
+    try {
+      await widget.ble.reforwardEye(slot);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Wird ans zweite Auge gesendet. Das dauert etwa 10 Sekunden - '
+                      'bitte die Verbindung so lange nicht trennen.'),
+        duration: Duration(seconds: 6),
+      ));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Konnte nicht senden: $e')),
+      );
+    }
+  }
+
   Future<void> _deleteSlot(int slot) async {
     final pid = widget.ble.deviceId;
     final ok = await showDialog<bool>(
@@ -90,7 +148,7 @@ class _HomeScreenState extends State<HomeScreen> {
             : 'Augenpaar');
 
     final screens = [
-      _EyeGrid(ble: ble, slotMeta: _slotMeta, onDeleteSlot: _deleteSlot),
+      _EyeGrid(ble: ble, slotMeta: _slotMeta, onSlotActions: _slotActions),
       CloudEyesScreen(ble: ble, onSlotMetaChanged: _loadSlotMeta),
       SettingsScreen(ble: ble),
       DiagnosticsScreen(ble: ble),
@@ -156,8 +214,8 @@ class _StatusDot extends StatelessWidget {
 class _EyeGrid extends StatelessWidget {
   final EyeBle ble;
   final List<SlotMeta?> slotMeta;
-  final Future<void> Function(int slot) onDeleteSlot;
-  const _EyeGrid({required this.ble, required this.slotMeta, required this.onDeleteSlot});
+  final Future<void> Function(int slot) onSlotActions;
+  const _EyeGrid({required this.ble, required this.slotMeta, required this.onSlotActions});
 
   int get _totalCount => kHardcodedEyeCount + kCloudSlotCount;
 
@@ -198,7 +256,7 @@ class _EyeGrid extends StatelessWidget {
             child: InkWell(
               borderRadius: BorderRadius.circular(18),
               onTap: () => ble.setEyeId(i),
-              onLongPress: isCloud ? () => onDeleteSlot(cloudSlot) : null,
+              onLongPress: isCloud ? () => onSlotActions(cloudSlot) : null,
               child: Padding(
                 padding: const EdgeInsets.all(8),
                 child: Column(

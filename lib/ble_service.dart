@@ -815,6 +815,23 @@ class EyeBle extends ChangeNotifier {
     return true;
   }
 
+  /// Stoesst die Funk-Weitergabe eines bereits hochgeladenen Auges an den Slave neu an.
+  ///
+  /// Noetig, wenn die Weitergabe abgebrochen ist - etwa weil eines der Augen neu
+  /// gestartet hat. Der Master hat das Bild dann vollstaendig liegen, sein
+  /// Weitergabe-Zustand lebt aber nur im RAM und ist nach einem Neustart weg. Ohne
+  /// dieses Kommando muesste man die 200 KB erneut vom Handy schicken, nur um eine
+  /// Funkuebertragung auszuloesen, die der Master allein erledigen kann.
+  ///
+  /// Der Master lehnt ab, wenn der Slot leer oder die Datei unvollstaendig ist.
+  Future<void> reforwardEye(int slot) async {
+    if (locked) return;
+    final c = _chars[EyeUuids.chrEyeUpload];
+    if (c == null) return;
+    if (slot < 0 || slot >= kCloudSlotCount) return;
+    await c.write([0x04, slot, 0, 0, 0, 0], withoutResponse: false);
+  }
+
   /// Loescht den Cloud-Slot auf Master + Slave.
   Future<void> deleteEye(int slot) async {
     if (locked) return;
