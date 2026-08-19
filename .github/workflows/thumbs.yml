@@ -44,12 +44,17 @@ jobs:
 
       - name: Ergebnis zurueckschreiben
         run: |
-          if git diff --quiet -- cloud-eyes/thumbs; then
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # ERST einordnen, DANN vergleichen. "git diff" allein uebersieht neu
+          # angelegte Dateien, weil die noch unbekannt sind - ein fehlendes
+          # Vorschaubild, also genau der Fall, um den es hier geht, waere damit
+          # stillschweigend durchgerutscht. "--cached" sieht auch neue und
+          # geloeschte Dateien.
+          git add -A cloud-eyes/thumbs
+          if git diff --cached --quiet -- cloud-eyes/thumbs; then
             echo "Vorschaubilder sind bereits aktuell - nichts zu tun."
             exit 0
           fi
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add cloud-eyes/thumbs
           git commit -m "chore: Vorschaubilder der Cloud-Augen neu erzeugt"
           git push
