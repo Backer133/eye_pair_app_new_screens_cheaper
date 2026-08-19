@@ -1,0 +1,55 @@
+# Erzeugt die Vorschaubilder fuer die Cloud-Augen automatisch neu.
+#
+# Warum automatisch und nicht von Hand: Die App zeigt in der Cloud-Liste 56x56 grosse
+# Vorschauen. Ohne kleine Vorlagen laedt sie dafuer die vollen Augen - elf Stueck mal
+# rund 1,5 MB sind 16,3 MB bei jedem Oeffnen des Bildschirms. GitHub hat den Zugriff
+# daraufhin gedrosselt (HTTP 429/503), womit Vorschau UND Download ausfielen.
+#
+# Ein "bitte nach jedem neuen Auge das Skript ausfuehren" waere genau die Absicherung,
+# die irgendwann vergessen wird - und der Fehler faellt erst Wochen spaeter auf, wenn
+# die Drosselung zuschlaegt. Deshalb macht es GitHub selbst.
+name: Vorschaubilder der Cloud-Augen
+
+on:
+  push:
+    branches: [main, master]
+    # Nur wenn sich die Augen selbst aendern. Die Vorschauen sind .webp und stehen im
+    # Unterordner thumbs/ - sie loesen den Ablauf also nicht erneut aus. Zusaetzlich
+    # verhindert GitHub grundsaetzlich, dass ein mit GITHUB_TOKEN erzeugter Commit
+    # weitere Ablaeufe startet; auch der APK-Bau springt dadurch nicht mit an.
+    paths:
+      - 'cloud-eyes/*.png'
+      - 'cloud-eyes/*.jpg'
+      - 'cloud-eyes/*.jpeg'
+      - 'cloud-eyes/make_thumbs.py'
+  workflow_dispatch:      # erlaubt manuelles Nachziehen ueber die GitHub-Oberflaeche
+
+jobs:
+  thumbs:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write     # noetig, um die erzeugten Vorschauen zurueckzuschreiben
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Pillow installieren
+        run: pip install --quiet pillow
+
+      - name: Vorschaubilder erzeugen
+        run: python cloud-eyes/make_thumbs.py
+
+      - name: Ergebnis zurueckschreiben
+        run: |
+          if git diff --quiet -- cloud-eyes/thumbs; then
+            echo "Vorschaubilder sind bereits aktuell - nichts zu tun."
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cloud-eyes/thumbs
+          git commit -m "chore: Vorschaubilder der Cloud-Augen neu erzeugt"
+          git push

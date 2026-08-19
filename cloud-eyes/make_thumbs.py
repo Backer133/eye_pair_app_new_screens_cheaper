@@ -15,7 +15,15 @@ WebP, weil es Transparenz kann (zwei der Augen haben transparente Bereiche, als 
 wuerden die schwarz) und trotzdem etwa zwoelfmal kleiner ist als PNG. Flutter
 dekodiert WebP nativ, es ist keine zusaetzliche Abhaengigkeit noetig.
 
-Aufruf aus dem Repo-Wurzelverzeichnis:  python cloud-eyes/make_thumbs.py
+Normalerweise muss das NIEMAND von Hand aufrufen: .github/workflows/thumbs.yml
+startet dieses Skript automatisch, sobald ein Bild in cloud-eyes/ dazukommt oder sich
+aendert, und schreibt das Ergebnis zurueck ins Repo. Ein "bitte nicht vergessen"
+waere genau die Absicherung, die irgendwann vergessen wird.
+
+Von Hand nur noetig, wenn der Ablauf einmal fehlschlaegt:
+
+    pip install pillow
+    python cloud-eyes/make_thumbs.py
 """
 import glob
 import os
