@@ -255,6 +255,18 @@ class EyeBle extends ChangeNotifier {
   StreamSubscription<BluetoothConnectionState>? _subConn;
 
   Future<void> connectAndDiscover(BluetoothDevice d) async {
+    // Erst eine eventuell noch offene Verbindung sauber abbauen.
+    //
+    // Ohne das blieben beim Wechsel auf ein anderes Augenpaar die alte Verbindung UND
+    // ihre Notify-Abos bestehen. Beide Master schrieben dann in denselben Zustand, und
+    // die Diagnose sprang bei jeder Meldung zwischen den Werten des einen und des
+    // anderen hin und her - sichtbar als Kanal, der zwischen 1 und 6 wechselt, obwohl
+    // im Seriellen Log beider Geraete der Kanal stabil stand.
+    //
+    // Mit nur einem Paar konnte das nie auffallen.
+    if (device != null || _subConn != null) {
+      await disconnect();
+    }
     device = d;
     await d.connect(timeout: const Duration(seconds: 10), autoConnect: false);
 
@@ -461,6 +473,13 @@ class EyeBle extends ChangeNotifier {
     authLevel = 0;
     authSupported = false;
     slaveLinked = false;
+    // Diagnosewerte mit zuruecksetzen, sonst zeigt der Bildschirm nach einem Wechsel
+    // noch die Zahlen des vorigen Augenpaares, bis dessen Nachfolger sich meldet.
+    linkState = 0;
+    silenceMs = 0;
+    lossPct = 0;
+    masterChannel = 0;
+    slaveChannel = 0;
     pairingFound.clear();
     pairingState = 0;
     pairingError = 0;
