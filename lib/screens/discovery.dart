@@ -19,6 +19,18 @@ class DiscoveryScreen extends StatefulWidget {
 class _DiscoveryScreenState extends State<DiscoveryScreen>
     with SingleTickerProviderStateMixin {
   final List<ScanResult> _results = [];
+  /// Wann wurde jedes Geraet zuletzt im Scan gesehen.
+  ///
+  /// Die Liste wird bewusst nicht bei jedem Scan geleert (siehe initState), sonst
+  /// verschwinden Augen, sobald Android den Scanner drosselt - ein gedrosselter Scan
+  /// liefert gar nichts. Dauerhaft behalten ist aber auch falsch: abgeschaltete Augen
+  /// standen bisher endlos in der Liste. Deshalb dieser Zeitstempel je Geraet.
+  final Map<DeviceIdentifier, DateTime> _lastSeen = {};
+
+  /// So lange darf ein Auge fehlen, bevor es aus der Liste faellt. Grosszuegig
+  /// bemessen: ein Scan dauert 8 s, und zwischen zwei Starts liegen mindestens 3 s.
+  /// Ein einzelner leerer Scan soll die Liste nicht raeumen.
+  static const Duration _staleAfter = Duration(seconds: 45);
   StreamSubscription<List<ScanResult>>? _subScan;
   StreamSubscription<bool>? _subScanning;
   bool _scanning = false;   // vom echten BLE-Stack (FlutterBluePlus.isScanning)
@@ -52,6 +64,22 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
         } else {
           _results.add(r);
         }
+      }
+      // Nur aufraeumen, wenn dieser Scan ueberhaupt etwas geliefert hat. Sonst wuerde
+      // eine Android-Drossel - die nichts liefert - die ganze Liste leerraeumen und
+      // genau den Fall herbeifuehren, den das dauerhafte Merken verhindern soll.
+      if (rs.isNotEmpty) {
+        final now = DateTime.now();
+        for (final r in rs) {
+          _lastSeen[r.device.remoteId] = now;
+        }
+        _results.removeWhere((x) {
+          final seen = _lastSeen[x.device.remoteId];
+          if (seen == null) return false;
+          // Das Geraet, mit dem gerade verbunden wird, nie entfernen.
+          if (x.device.remoteId.str == _connectingId) return false;
+          return now.difference(seen) > _staleAfter;
+        });
       }
       _results.sort((a, b) => b.rssi.compareTo(a.rssi));   // staerkstes Signal zuerst
       if (mounted) setState(() {});
