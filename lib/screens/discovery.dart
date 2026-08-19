@@ -19,18 +19,13 @@ class DiscoveryScreen extends StatefulWidget {
 class _DiscoveryScreenState extends State<DiscoveryScreen>
     with SingleTickerProviderStateMixin {
   final List<ScanResult> _results = [];
-  /// Wann wurde jedes Geraet zuletzt im Scan gesehen.
+  /// true, wenn der zuletzt abgeschlossene Suchlauf nichts gefunden hat.
   ///
-  /// Die Liste wird bewusst nicht bei jedem Scan geleert (siehe initState), sonst
-  /// verschwinden Augen, sobald Android den Scanner drosselt - ein gedrosselter Scan
-  /// liefert gar nichts. Dauerhaft behalten ist aber auch falsch: abgeschaltete Augen
-  /// standen bisher endlos in der Liste. Deshalb dieser Zeitstempel je Geraet.
-  final Map<DeviceIdentifier, DateTime> _lastSeen = {};
-
-  /// So lange darf ein Auge fehlen, bevor es aus der Liste faellt. Grosszuegig
-  /// bemessen: ein Scan dauert 8 s, und zwischen zwei Starts liegen mindestens 3 s.
-  /// Ein einzelner leerer Scan soll die Liste nicht raeumen.
-  static const Duration _staleAfter = Duration(seconds: 45);
+  /// Wichtig fuer die Unterscheidung "kein Auge da" gegen "Android hat den Scanner
+  /// gedrosselt": Nach zu vielen Scan-Starts liefert Android stumm keine Treffer mehr.
+  /// Da die Liste jetzt bei jedem Suchlauf neu aufgebaut wird, saehe beides gleich aus -
+  /// deshalb der Hinweis in der Oberflaeche.
+  bool _emptyScan = false;
   StreamSubscription<List<ScanResult>>? _subScan;
   StreamSubscription<bool>? _subScanning;
   bool _scanning = false;   // vom echten BLE-Stack (FlutterBluePlus.isScanning)
@@ -51,36 +46,30 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
     // der "Neu suchen"-Button waehrend eines laufenden Scans wirklich gesperrt ist
     // (verhindert das schnelle Neu-Starten, das Android drosselt).
     _subScanning = FlutterBluePlus.isScanning.listen((s) {
-      if (mounted) setState(() => _scanning = s);
+      if (!mounted) return;
+      setState(() {
+        // Endet ein Suchlauf ohne einen einzigen Treffer, ist das mehrdeutig: entweder
+        // ist wirklich kein Auge in Reichweite, oder Android hat den Scanner gedrosselt.
+        // Beides sieht gleich aus, deshalb wird es in der Oberflaeche benannt statt
+        // stillschweigend als "nichts da" dargestellt.
+        if (_scanning && !s) _emptyScan = _results.isEmpty;
+        _scanning = s;
+      });
     });
-    // Ergebnisse DAUERHAFT mitschreiben und NICHT bei jedem Neu-Suchen loeschen -
-    // so verschwindet ein einmal gefundenes Auge nicht mehr aus der Liste, auch
-    // wenn ein spaeterer Scan (z.B. wegen Android-Drossel) nichts liefert.
+    // Die Liste zeigt AUSSCHLIESSLICH die Treffer des laufenden Suchlaufs.
+    //
+    // onScanResults liefert ohnehin genau diese - der Stack leert seine Sammlung bei
+    // jedem startScan(). Frueher wurden die Ergebnisse hier ueber alle Suchlaeufe
+    // hinweg zusammengefuehrt, damit ein einmal gefundenes Auge nicht verschwindet,
+    // wenn Android drosselt. Das hielt dafuer abgeschaltete Augen endlos in der Liste.
+    //
+    // Jetzt ist die Anzeige ehrlich, und der Drossel-Fall wird stattdessen benannt
+    // (siehe _emptyScan).
     _subScan = FlutterBluePlus.onScanResults.listen((rs) {
-      for (final r in rs) {
-        final idx = _results.indexWhere((x) => x.device.remoteId == r.device.remoteId);
-        if (idx >= 0) {
-          _results[idx] = r;
-        } else {
-          _results.add(r);
-        }
-      }
-      // Nur aufraeumen, wenn dieser Scan ueberhaupt etwas geliefert hat. Sonst wuerde
-      // eine Android-Drossel - die nichts liefert - die ganze Liste leerraeumen und
-      // genau den Fall herbeifuehren, den das dauerhafte Merken verhindern soll.
-      if (rs.isNotEmpty) {
-        final now = DateTime.now();
-        for (final r in rs) {
-          _lastSeen[r.device.remoteId] = now;
-        }
-        _results.removeWhere((x) {
-          final seen = _lastSeen[x.device.remoteId];
-          if (seen == null) return false;
-          // Das Geraet, mit dem gerade verbunden wird, nie entfernen.
-          if (x.device.remoteId.str == _connectingId) return false;
-          return now.difference(seen) > _staleAfter;
-        });
-      }
+      _results
+        ..clear()
+        ..addAll(rs);
+      if (rs.isNotEmpty) _emptyScan = false;
       _results.sort((a, b) => b.rssi.compareTo(a.rssi));   // staerkstes Signal zuerst
       if (mounted) setState(() {});
     });
@@ -121,6 +110,8 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
       if (since < minGap) await Future.delayed(minGap - since);
       if (!mounted) return;
       _lastScanStart = DateTime.now();
+      // Alte Treffer verwerfen - ab jetzt zaehlt nur, was DIESER Suchlauf findet.
+      if (mounted) setState(() { _results.clear(); _emptyScan = false; });
       // onScanResults-Listener laeuft dauerhaft (siehe initState) -> Ergebnisse
       // werden gemerged, nicht geloescht.
       await FlutterBluePlus.startScan(
@@ -289,6 +280,26 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
               style: TextStyle(fontSize: 13, color: Colors.white.withOpacity(.5), height: 1.4),
             ),
           ),
+          // Ein leerer Suchlauf ist mehrdeutig: kein Auge da, ODER Android hat den
+          // Scanner gedrosselt (nach zu vielen Starts liefert er stumm nichts mehr).
+          // Seit die Liste bei jedem Suchlauf neu aufgebaut wird, sieht beides gleich
+          // aus - deshalb wird die zweite Moeglichkeit hier ausdruecklich genannt,
+          // statt den User an eingeschalteten Augen zweifeln zu lassen.
+          if (_emptyScan && !_scanning)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(40, 20, 40, 0),
+              child: Text(
+                'Findet der naechste Suchlauf ebenfalls nichts, obwohl die Augen '
+                'laufen: kurz warten und erneut suchen. Android sperrt den '
+                'Bluetooth-Scanner voruebergehend, wenn zu schnell hintereinander '
+                'gesucht wird.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 12, height: 1.4,
+                  color: Colors.white.withOpacity(.38),
+                ),
+              ),
+            ),
         ],
       ),
     );
