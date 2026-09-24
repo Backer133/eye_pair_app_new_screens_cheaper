@@ -16,6 +16,14 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _tab = 0;
+
+  /// Welches Auge die Auswahl im Raster betrifft.
+  ///
+  /// Liegt bewusst HIER und nicht im Raster selbst: der Reiterwechsel ersetzt den
+  /// Bildschirm komplett (body: screens[_tab]), der Umschalter sprang dadurch bei
+  /// jeder Rueckkehr auf "Beide" zurueck. Wer dann eine Kachel antippte, setzte
+  /// unbeabsichtigt beide Augen.
+  int _eyeTarget = EyeBle.kBeide;
   // Slot-Metadata Cache: [slot_idx] -> SlotMeta? (null = leer)
   final List<SlotMeta?> _slotMeta = List<SlotMeta?>.filled(kCloudSlotCount, null);
 
@@ -148,7 +156,13 @@ class _HomeScreenState extends State<HomeScreen> {
             : 'Augenpaar');
 
     final screens = [
-      _EyeGrid(ble: ble, slotMeta: _slotMeta, onSlotActions: _slotActions),
+      _EyeGrid(
+        ble: ble,
+        slotMeta: _slotMeta,
+        onSlotActions: _slotActions,
+        target: _eyeTarget,
+        onTargetChanged: (t) => setState(() => _eyeTarget = t),
+      ),
       CloudEyesScreen(ble: ble, onSlotMetaChanged: _loadSlotMeta),
       SettingsScreen(ble: ble),
       DiagnosticsScreen(ble: ble),
@@ -211,23 +225,22 @@ class _StatusDot extends StatelessWidget {
 }
 
 /// Augen-Grid: hardcoded Augen (Asset-Vorschau) + Cloud-Slots mit echter Bild-Vorschau.
-class _EyeGrid extends StatefulWidget {
+class _EyeGrid extends StatelessWidget {
   final EyeBle ble;
   final List<SlotMeta?> slotMeta;
   final Future<void> Function(int slot) onSlotActions;
-  const _EyeGrid({required this.ble, required this.slotMeta, required this.onSlotActions});
+  /// Zustand liegt im Eltern-Bildschirm, damit er den Reiterwechsel ueberlebt.
+  final int target;
+  final void Function(int) onTargetChanged;
+  const _EyeGrid({
+    required this.ble,
+    required this.slotMeta,
+    required this.onSlotActions,
+    required this.target,
+    required this.onTargetChanged,
+  });
 
-  @override
-  State<_EyeGrid> createState() => _EyeGridState();
-}
-
-class _EyeGridState extends State<_EyeGrid> {
-  /// Welches Auge die Auswahl betrifft. Voreinstellung "beide", damit der Normalfall
-  /// unveraendert ein einziger Tipp bleibt.
-  int _target = EyeBle.kBeide;
-
-  EyeBle get ble => widget.ble;
-  List<SlotMeta?> get slotMeta => widget.slotMeta;
+  int get _target => target;
 
   int get _totalCount => kHardcodedEyeCount + kCloudSlotCount;
 
@@ -257,7 +270,28 @@ class _EyeGridState extends State<_EyeGrid> {
             ],
             selected: {_target},
             showSelectedIcon: false,
-            onSelectionChanged: (s) => setState(() => _target = s.first),
+            onSelectionChanged: (s) => onTargetChanged(s.first),
+          ),
+        ),
+        // IMMER sagen, was ein Tipp bewirkt. Ohne diese Zeile sieht man dem Raster
+        // nicht an, ob die Auswahl ein Auge oder beide trifft - und setzt dann
+        // versehentlich beide, obwohl man eines meinte.
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+          child: Text(
+            switch (_target) {
+              EyeBle.kMaster => 'Tippen setzt nur Auge 1',
+              EyeBle.kSlave  => 'Tippen setzt nur Auge 2',
+              _              => 'Tippen setzt BEIDE Augen',
+            },
+            textAlign: TextAlign.center,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: _target == EyeBle.kBeide ? FontWeight.w400 : FontWeight.w700,
+              color: _target == EyeBle.kBeide
+                  ? Colors.white.withOpacity(.45)
+                  : kAccent,
+            ),
           ),
         ),
         // Bei "Beide" und unterschiedlichen Augen waere jede Markierung im Raster
@@ -265,9 +299,9 @@ class _EyeGridState extends State<_EyeGrid> {
         // gesagt, was wo laeuft.
         if (_target == EyeBle.kBeide && !gleich)
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
             child: Text(
-              'Augen sind verschieden -  Auge 1: ${_eyeName(idMaster)}'
+              'Aktuell verschieden -  Auge 1: ${_eyeName(idMaster)}'
               '  -  Auge 2: ${_eyeName(idSlave)}',
               textAlign: TextAlign.center,
               style: TextStyle(fontSize: 12, color: Colors.white.withOpacity(.55)),
@@ -321,7 +355,7 @@ class _EyeGridState extends State<_EyeGrid> {
             child: InkWell(
               borderRadius: BorderRadius.circular(18),
               onTap: () => ble.setEyeId(_target, i),
-              onLongPress: isCloud ? () => widget.onSlotActions(cloudSlot) : null,
+              onLongPress: isCloud ? () => onSlotActions(cloudSlot) : null,
               child: Padding(
                 padding: const EdgeInsets.all(8),
                 child: Column(
