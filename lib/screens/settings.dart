@@ -19,8 +19,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String _version = '';
 
   // Waehrend des Slider-Ziehens: lokaler Vorschauwert, bis losgelassen wird.
-  int? _brightnessPreview;
-  int _brightness(EyeBle ble) => _brightnessPreview ?? ble.brightness;
+  // Je Auge einer, sonst wuerde das Ziehen am einen Regler den anderen mitbewegen.
+  final List<int?> _brightnessPreview = [null, null];
+  int _brightness(EyeBle ble, int target) =>
+      _brightnessPreview[target] ?? ble.brightness[target];
 
   @override
   void initState() {
@@ -115,7 +117,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
       listenable: widget.ble,
       builder: (context, _) {
         final ble = widget.ble;
-        final animOn = ble.animEnabled == 1;
         return ListView(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
           children: [
@@ -137,61 +138,23 @@ class _SettingsScreenState extends State<SettingsScreen> {
             ),
 
             // ---- Anzeige ----
+            // Animation und Helligkeit gelten je Auge. Bei nur zwei Geraeten sind zwei
+            // Schalter uebersichtlicher als ein Umschalter: man sieht beide Zustaende
+            // gleichzeitig und muss zum Vergleichen nicht hin- und herwechseln.
             const SectionHeader('Anzeige', icon: Icons.tune),
             Card(
-              child: SwitchListTile(
-                contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                secondary: _iconBox(Icons.movie_filter_outlined, kAccentGlow),
-                title: const Text('Animation',
-                    style: TextStyle(fontWeight: FontWeight.w700)),
-                subtitle: Text(animOn
-                    ? 'Augen-Animation laeuft'
-                    : 'Augen zentriert (pausiert)'),
-                value: animOn,
-                activeColor: kAccent,
-                onChanged: (v) => ble.setAnimEnabled(v),
-              ),
+              child: Column(children: [
+                _animSchalter(ble, EyeBle.kMaster, 'Animation Auge 1'),
+                const Divider(height: 1, indent: 16, endIndent: 16),
+                _animSchalter(ble, EyeBle.kSlave, 'Animation Auge 2'),
+              ]),
             ),
             Card(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        _iconBox(Icons.brightness_6_outlined, kAccentGlow),
-                        const SizedBox(width: 12),
-                        const Expanded(
-                          child: Text('Helligkeit',
-                              style: TextStyle(fontWeight: FontWeight.w700)),
-                        ),
-                        Text('${(_brightness(ble) * 100 / 255).round()} %',
-                            style: const TextStyle(color: Colors.white70)),
-                      ],
-                    ),
-                    Slider(
-                      // Untergrenze 10 statt 0: bei 0 waere das Display komplett
-                      // dunkel und der Regler kaum wiederzufinden.
-                      min: 10, max: 255,
-                      value: _brightness(ble).toDouble().clamp(10, 255),
-                      activeColor: kAccent,
-                      // Waehrend des Ziehens nur lokal anzeigen; gesendet wird beim
-                      // Loslassen. Jeder Write schreibt am Master NVS und schickt
-                      // eine ConfigMsg an den Slave - das soll nicht pro Pixel passieren.
-                      onChanged: ble.locked
-                          ? null
-                          : (v) => setState(() => _brightnessPreview = v.round()),
-                      onChangeEnd: (v) {
-                        _brightnessPreview = null;
-                        ble.setBrightness(v.round());
-                      },
-                    ),
-                    const Text('Gilt fuer beide Augen',
-                        style: TextStyle(fontSize: 12, color: Colors.white38)),
-                  ],
-                ),
-              ),
+              child: Column(children: [
+                _helligkeit(ble, EyeBle.kMaster, 'Helligkeit Auge 1'),
+                const Divider(height: 1, indent: 16, endIndent: 16),
+                _helligkeit(ble, EyeBle.kSlave, 'Helligkeit Auge 2'),
+              ]),
             ),
 
             // ---- Einbau & Bewegung ----
@@ -315,6 +278,61 @@ class _SettingsScreenState extends State<SettingsScreen> {
           ],
         );
       },
+    );
+  }
+
+  /// Ein Animations-Schalter fuer genau ein Auge.
+  Widget _animSchalter(EyeBle ble, int target, String titel) {
+    final an = ble.animEnabled[target] == 1;
+    return SwitchListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+      secondary: _iconBox(Icons.movie_filter_outlined, kAccentGlow),
+      title: Text(titel, style: const TextStyle(fontWeight: FontWeight.w700)),
+      subtitle: Text(an ? 'Animation laeuft' : 'Auge zentriert (pausiert)'),
+      value: an,
+      activeColor: kAccent,
+      onChanged: ble.locked ? null : (v) => ble.setAnimEnabled(target, v),
+    );
+  }
+
+  /// Ein Helligkeitsregler fuer genau ein Auge.
+  Widget _helligkeit(EyeBle ble, int target, String titel) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              _iconBox(Icons.brightness_6_outlined, kAccentGlow),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(titel,
+                    style: const TextStyle(fontWeight: FontWeight.w700)),
+              ),
+              Text('${(_brightness(ble, target) * 100 / 255).round()} %',
+                  style: const TextStyle(color: Colors.white70)),
+            ],
+          ),
+          Slider(
+            // Untergrenze 10 statt 0: bei 0 waere das Display komplett dunkel und
+            // der Regler kaum wiederzufinden.
+            min: 10, max: 255,
+            value: _brightness(ble, target).toDouble().clamp(10, 255),
+            activeColor: kAccent,
+            // Waehrend des Ziehens nur lokal anzeigen; gesendet wird beim Loslassen.
+            // Jeder Write schreibt am Master NVS und schickt eine ConfigMsg an den
+            // Slave - das soll nicht pro Pixel passieren.
+            onChanged: ble.locked
+                ? null
+                : (v) => setState(() => _brightnessPreview[target] = v.round()),
+            onChangeEnd: (v) {
+              setState(() => _brightnessPreview[target] = null);
+              ble.setBrightness(target, v.round());
+            },
+          ),
+        ],
+      ),
     );
   }
 

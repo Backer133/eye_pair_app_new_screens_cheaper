@@ -211,16 +211,77 @@ class _StatusDot extends StatelessWidget {
 }
 
 /// Augen-Grid: hardcoded Augen (Asset-Vorschau) + Cloud-Slots mit echter Bild-Vorschau.
-class _EyeGrid extends StatelessWidget {
+class _EyeGrid extends StatefulWidget {
   final EyeBle ble;
   final List<SlotMeta?> slotMeta;
   final Future<void> Function(int slot) onSlotActions;
   const _EyeGrid({required this.ble, required this.slotMeta, required this.onSlotActions});
 
+  @override
+  State<_EyeGrid> createState() => _EyeGridState();
+}
+
+class _EyeGridState extends State<_EyeGrid> {
+  /// Welches Auge die Auswahl betrifft. Voreinstellung "beide", damit der Normalfall
+  /// unveraendert ein einziger Tipp bleibt.
+  int _target = EyeBle.kBeide;
+
+  EyeBle get ble => widget.ble;
+  List<SlotMeta?> get slotMeta => widget.slotMeta;
+
   int get _totalCount => kHardcodedEyeCount + kCloudSlotCount;
+
+  /// Klarname eines Augen-Index - fuer die Hinweiszeile, wenn die Augen verschieden sind.
+  String _eyeName(int id) {
+    if (id < kHardcodedEyeCount) return kEyeLabels[id];
+    final slot = id - kHardcodedEyeCount;
+    final meta = slot < slotMeta.length ? slotMeta[slot] : null;
+    return meta?.name ?? 'Cloud ${slot + 1}';
+  }
 
   @override
   Widget build(BuildContext context) {
+    final idMaster = ble.eyeId[EyeBle.kMaster];
+    final idSlave  = ble.eyeId[EyeBle.kSlave];
+    final gleich   = idMaster == idSlave;
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+          child: SegmentedButton<int>(
+            segments: const [
+              ButtonSegment(value: EyeBle.kBeide,  label: Text('Beide')),
+              ButtonSegment(value: EyeBle.kMaster, label: Text('Auge 1')),
+              ButtonSegment(value: EyeBle.kSlave,  label: Text('Auge 2')),
+            ],
+            selected: {_target},
+            showSelectedIcon: false,
+            onSelectionChanged: (s) => setState(() => _target = s.first),
+          ),
+        ),
+        // Bei "Beide" und unterschiedlichen Augen waere jede Markierung im Raster
+        // gelogen - deshalb wird dort nichts markiert und stattdessen hier im Klartext
+        // gesagt, was wo laeuft.
+        if (_target == EyeBle.kBeide && !gleich)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: Text(
+              'Augen sind verschieden -  Auge 1: ${_eyeName(idMaster)}'
+              '  -  Auge 2: ${_eyeName(idSlave)}',
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 12, color: Colors.white.withOpacity(.55)),
+            ),
+          ),
+        Expanded(child: _grid(context)),
+      ],
+    );
+  }
+
+  Widget _grid(BuildContext context) {
+    final idMaster = ble.eyeId[EyeBle.kMaster];
+    final idSlave  = ble.eyeId[EyeBle.kSlave];
+
     return GridView.builder(
       padding: const EdgeInsets.all(12),
       itemCount: _totalCount,
@@ -237,7 +298,11 @@ class _EyeGrid extends StatelessWidget {
         // Master meldet via CHR_SLOT_STATUS welche Slots auf der LittleFS belegt sind.
         // Wichtig nach Reinstall: lokale Metadaten weg, aber Master hat die Bilder noch.
         final occupied = isCloud && (ble.slotOccupiedMask & (1 << cloudSlot)) != 0;
-        final selected = i == ble.eyeId;
+        final selected = switch (_target) {
+          EyeBle.kMaster => i == idMaster,
+          EyeBle.kSlave  => i == idSlave,
+          _              => i == idMaster && i == idSlave,   // "Beide": nur wenn gleich
+        };
         return Container(
           decoration: BoxDecoration(
             color: kSurface,
@@ -255,8 +320,8 @@ class _EyeGrid extends StatelessWidget {
             borderRadius: BorderRadius.circular(18),
             child: InkWell(
               borderRadius: BorderRadius.circular(18),
-              onTap: () => ble.setEyeId(i),
-              onLongPress: isCloud ? () => onSlotActions(cloudSlot) : null,
+              onTap: () => ble.setEyeId(_target, i),
+              onLongPress: isCloud ? () => widget.onSlotActions(cloudSlot) : null,
               child: Padding(
                 padding: const EdgeInsets.all(8),
                 child: Column(

@@ -164,10 +164,19 @@ class EyeBle extends ChangeNotifier {
   final Map<Guid, BluetoothCharacteristic> _chars = {};
 
   // State exposed to UI
-  int eyeId = 0;
-  int brightness = 255;
-  int animEnabled = 1;
+  //
+  // Augenbild, Helligkeit und Animation gelten JE AUGE: Index 0 = Master, 1 = Slave.
+  // Gleiche Anordnung wie eyeYOff/eyeVisH bei der Maskenausrichtung, damit der
+  // Ausricht-Bildschirm und das Augen-Raster dasselbe Muster verwenden.
+  List<int> eyeId       = [0, 0];
+  List<int> brightness  = [255, 255];
+  List<int> animEnabled = [1, 1];
   int eyeCount = 0;
+
+  /// Ziel fuer die Setter unten.
+  static const int kMaster = 0;
+  static const int kSlave  = 1;
+  static const int kBeide  = 2;
   // Funk-Status: haengt der zweite Screen (Slave) per ESP-NOW dran? Kommt aus dem
   // Pair-State, den der Master ueber CHR_SLAVE_LINK meldet.
   bool slaveLinked = false;
@@ -488,10 +497,21 @@ class EyeBle extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Liest einen Wert, der je Auge getrennt ist: 2 Bytes [Master, Slave].
+  ///
+  /// Aeltere Firmware antwortet mit EINEM Byte - dann galt der Wert noch fuer beide
+  /// Augen, also wird er auf beide Plaetze gelegt. Ohne diesen Fall braeche die App
+  /// an einem noch nicht aktualisierten Auge ab.
+  Future<List<int>?> _readPair(Guid id) async {
+    final v = await _readBytes(id);
+    if (v == null || v.isEmpty) return null;
+    return v.length >= 2 ? [v[0], v[1]] : [v[0], v[0]];
+  }
+
   Future<void> _readAll() async {
-    final eid   = await _readByte(EyeUuids.chrEyeId);
-    final br    = await _readByte(EyeUuids.chrBrightness);
-    final anim  = await _readByte(EyeUuids.chrAnimEn);
+    final eid   = await _readPair(EyeUuids.chrEyeId);
+    final br    = await _readPair(EyeUuids.chrBrightness);
+    final anim  = await _readPair(EyeUuids.chrAnimEn);
     final cnt   = await _readByte(EyeUuids.chrEyeCount);
     final link  = await _readByte(EyeUuids.chrSlaveLink);
 
@@ -553,7 +573,10 @@ class EyeBle extends ChangeNotifier {
     subscribeErrors.clear();
 
     _subEyeId = await _subscribe(EyeUuids.chrEyeId, (v) {
-      if (v.isNotEmpty) { eyeId = v[0]; notifyListeners(); }
+      // 2 Bytes [Master, Slave]; aeltere Firmware meldet nur eines fuer beide.
+      if (v.isEmpty) return;
+      eyeId = v.length >= 2 ? [v[0], v[1]] : [v[0], v[0]];
+      notifyListeners();
     });
     // Funk-Status live mitverfolgen (Master notifyt 1x/s).
     _subSlaveLink = await _subscribe(EyeUuids.chrSlaveLink, (v) {
@@ -756,12 +779,27 @@ class EyeBle extends ChangeNotifier {
     try { return await c.read(); } catch (e) { return null; }
   }
 
-  Future<void> setEyeId(int id) async {
-    if (locked) return;   // Firmware ignoriert den Write ohnehin -> nicht optimistisch anzeigen
-    final c = _chars[EyeUuids.chrEyeId]; if (c == null) return;
-    await c.write([id], withoutResponse: false);
-    eyeId = id; notifyListeners();
+  /// Schreibt einen Wert, der je Auge getrennt ist.
+  ///
+  /// [target] 0 = Master, 1 = Slave, 2 = beide. Bei "beide" geht EIN Byte raus, genau
+  /// wie frueher - das versteht auch ein Auge mit aelterer Firmware.
+  Future<bool> _writePair(Guid id, int target, int value, List<int> state) async {
+    if (locked) return false;   // Firmware ignoriert den Write ohnehin
+    final c = _chars[id];
+    if (c == null) return false;
+    await c.write(target == kBeide ? [value] : [target, value], withoutResponse: false);
+    if (target == kBeide) {
+      state[kMaster] = value;
+      state[kSlave]  = value;
+    } else {
+      state[target] = value;
+    }
+    notifyListeners();
+    return true;
   }
+
+  Future<void> setEyeId(int target, int id) =>
+      _writePair(EyeUuids.chrEyeId, target, id, eyeId);
 
   /// Setzt die Display-Helligkeit beider Augen (0..255). Der Master stellt sein
   /// eigenes Backlight und schiebt den Wert per ConfigMsg an den Slave weiter.
@@ -771,20 +809,11 @@ class EyeBle extends ChangeNotifier {
   /// lief vor tft.begin(), und TFT_eSPI::init() reisst den Backlight-Pin danach
   /// als normalen GPIO an sich - die PWM war damit wirkungslos. Seit die
   /// Zuordnung nach tft.begin() passiert, geht es.
-  Future<void> setBrightness(int value) async {
-    if (locked) return;
-    final v = value.clamp(0, 255);
-    final c = _chars[EyeUuids.chrBrightness]; if (c == null) return;
-    await c.write([v], withoutResponse: false);
-    brightness = v; notifyListeners();
-  }
+  Future<void> setBrightness(int target, int value) =>
+      _writePair(EyeUuids.chrBrightness, target, value.clamp(0, 255), brightness);
 
-  Future<void> setAnimEnabled(bool en) async {
-    if (locked) return;
-    final c = _chars[EyeUuids.chrAnimEn]; if (c == null) return;
-    await c.write([en ? 1 : 0], withoutResponse: false);
-    animEnabled = en ? 1 : 0; notifyListeners();
-  }
+  Future<void> setAnimEnabled(int target, bool en) =>
+      _writePair(EyeUuids.chrAnimEn, target, en ? 1 : 0, animEnabled);
 
   // setPairId entfernt - PAIR_ID ist read-only und wird nur im Sketch-Code geaendert.
 

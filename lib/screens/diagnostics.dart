@@ -74,8 +74,13 @@ class DiagnosticsScreen extends StatelessWidget {
               rows: [
                 _RowData(Icons.remove_red_eye, 'Augenpaar',
                     ble.deviceName.isEmpty ? '--' : ble.deviceName),
+                // Je Auge getrennt - nur wenn beide gleich stehen, reicht ein Wort.
                 _RowData(Icons.animation, 'Animation',
-                    ble.animEnabled == 1 ? 'An' : 'Aus'),
+                    ble.animEnabled[0] == ble.animEnabled[1]
+                        ? (ble.animEnabled[0] == 1 ? 'An' : 'Aus')
+                        : (ble.animEnabled[0] == 1
+                            ? 'Auge 1 an, Auge 2 aus'
+                            : 'Auge 1 aus, Auge 2 an')),
                 if (ble.authSupported)
                   _RowData(
                     ble.authorized ? Icons.lock_open : Icons.lock,
